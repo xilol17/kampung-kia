@@ -28,7 +28,7 @@ export default function Navbar({ isDarkMode, onLogout, onToggleTheme }: NavbarPr
     { name: "Dashboard", id: "dashboard", icon: "dashboard", href: "/dashboard" },
     { name: "My Timetable", id: "timetable", icon: "calendar", href: "/timetable" },
     { name: "Course Search", id: "search", icon: "search", href: "/search_course" },
-    { name: "Plan & Optimize", id: "structure", icon: "structure", href: "/plan" }, 
+    { name: "Course Structure", id: "structure", icon: "structure", href: "/course_structure" }, 
     { name: "Chatbot", id: "chatbot", icon: "chatbot", href: "/chatbot" },
   ];
 
