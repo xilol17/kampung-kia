@@ -14,7 +14,9 @@ export default function LoginPage() {
     e.preventDefault();
 
     try {
-      const response = await fetch("http://localhost:8080/api/login", { 
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+
+        const response = await fetch(`${baseUrl}/api/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
