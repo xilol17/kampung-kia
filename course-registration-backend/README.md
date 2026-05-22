@@ -5,6 +5,7 @@ DATABASE_URL="postgresql://postgres.[YOUR-SUPABASE-URL]:[PASSWORD]@[aws-0-ap-sou
 GEMINI_API_KEY="your_google_gemini_api_key_here"
 
 3.   npx prisma generate
+4.   npx ts-node prisma/seed.ts
 
 
 4.   npm run dev
