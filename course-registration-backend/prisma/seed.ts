@@ -1,239 +1,581 @@
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient } from '@prisma/client';
 
-const prisma = new PrismaClient()
+const prisma = new PrismaClient();
 
-// 辅助函数：随机获取 1-5（周一到周五）
-const getRandomDay = () => Math.floor(Math.random() * 5) + 1;
-// 辅助函数：随机获取上课时间槽
-const timeBlocks = [
-  { start: 800, end: 1000 }, { start: 1000, end: 1200 }, 
-  { start: 1400, end: 1600 }, { start: 1600, end: 1800 }
+const ACTIVE_SEMESTER = '2425-SEM2';
+
+const courses = [
+  // University Course
+  { courseCode: 'UHC1012', courseName: 'Falsafah dan Isu Semasa', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'UHC1032', courseName: 'Kursus Integriti dan Anti-Rasuah (KIAR)', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'UQA2002', courseName: 'Co-Curriculum', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'ULE1310', courseName: 'Fundamental of English Language', faculty: 'University', program: 'BCS', creditHours: 0 },
+  { courseCode: 'ULE1322', courseName: 'English for Academic Communications', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'ULA1312', courseName: 'Foreign Language - Arabic', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'ULM1312', courseName: 'Foreign Language - Mandarin', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'ULJ1312', courseName: 'Foreign Language - Japanese', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'UHC2022', courseName: 'Penghayatan Etika & Peradaban', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'ULE2332', courseName: 'English for Technical Communications', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'UGE2002', courseName: 'Technopreneurship', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'ULE2342', courseName: 'English for Professional Communication', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'UEE3112', courseName: 'Social Science Elective I - Psychology', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'UEE3122', courseName: 'Social Science Elective I - Communication', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'UEE4212', courseName: 'Social Science Elective II - Leadership', faculty: 'University', program: 'BCS', creditHours: 2 },
+  { courseCode: 'UEE4222', courseName: 'Social Science Elective II - Ethics and Society', faculty: 'University', program: 'BCS', creditHours: 2 },
+
+  // Maths Course
+  { courseCode: 'BUM1153', courseName: 'Intermediate Mathematics', faculty: 'Mathematics', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BUM1233', courseName: 'Discrete Mathematics & Applications', faculty: 'Mathematics', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BUM1433', courseName: 'Discrete Structure & Application', faculty: 'Mathematics', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BUM2413', courseName: 'Applied Statistics', faculty: 'Mathematics', program: 'BCS', creditHours: 3 },
+
+  // Faculty Course
+  { courseCode: 'BCN1043', courseName: 'Computer Architecture & Organization', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCI1143', courseName: 'Problem Solving', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS1033', courseName: 'Software Engineering', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCI2023', courseName: 'Database Systems', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCN1053', courseName: 'Data Communications & Networking', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCI1023', courseName: 'Programming Technique', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS1133', courseName: 'Systems Analysis & Design', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCI1093', courseName: 'Data Structure & Algorithms', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS2143', courseName: 'Object Oriented Programming', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS2173', courseName: 'Human Computer Interaction', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCN2053', courseName: 'Operating Systems', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS2243', courseName: 'Web Engineering', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS2313', courseName: 'Artificial Intelligence Techniques', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCI2313', courseName: 'Algorithm & Complexity', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCN2023', courseName: 'Data & Network Security', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCC3012', courseName: 'Undergraduate Project I', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 2 },
+  { courseCode: 'BCC3024', courseName: 'Undergraduate Project II', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 4 },
+  { courseCode: 'BCC4012', courseName: 'Industrial Training', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 12 },
+
+  // Software Engineering Program Course
+  { courseCode: 'BCS2233', courseName: 'Software Requirement Workshop', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS2343', courseName: 'Software Design Workshop', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS2213', courseName: 'Formal Method', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS3203', courseName: 'BCS Elective 1 - Mobile Application Development', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS3233', courseName: 'Software Testing', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS3303', courseName: 'BCS Elective 2 - Cloud Application Development', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS3143', courseName: 'Software Project Management', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS3153', courseName: 'Software Evolution & Maintenance', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS3133', courseName: 'Software Engineering Practices', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS4203', courseName: 'BCS Elective 3 - Secure Software Development', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
+  { courseCode: 'BCS3263', courseName: 'Software Quality Assurance', faculty: 'Faculty of Computing', program: 'BCS', creditHours: 3 },
 ];
-const getRandomTimeSlot = () => timeBlocks[Math.floor(Math.random() * timeBlocks.length)];
+
+const prerequisites = [
+  ['ULE2332', 'ULE1322'],
+  ['ULE2342', 'ULE2332'],
+  ['BCI1023', 'BCI1143'],
+  ['BCI1093', 'BCI1023'],
+  ['BCS2143', 'BCI1023'],
+  ['BCS2143', 'BCS1133'],
+  ['BCS2173', 'BCS1033'],
+  ['BCS2243', 'BCI1023'],
+  ['BCS2243', 'BCS1133'],
+  ['BCS2313', 'BCI1093'],
+  ['BCS2313', 'BUM1233'],
+  ['BCI2313', 'BCI1023'],
+  ['BCI2313', 'BCI1093'],
+  ['BCN2023', 'BCN1053'],
+  ['BCC3024', 'BCC3012'],
+  ['BCS2233', 'BCS1133'],
+  ['BCS2343', 'BCS2233'],
+  ['BCS2213', 'BUM1233'],
+  ['BCS2213', 'BCS2233'],
+  ['BCS3233', 'BCS1133'],
+  ['BCS3143', 'BCS2343'],
+  ['BCS3143', 'BCS3233'],
+  ['BCS3153', 'BCS3233'],
+  ['BCS3153', 'BCS2343'],
+  ['BCS3133', 'BCS2343'],
+  ['BCS3263', 'BCS3233'],
+] as const;
+
+const catalogItems = [
+  // Year 1 Sem 1
+  ['UHC1012', 1, 1, 'UNIVERSITY'],
+  ['UHC1032', 1, 1, 'UNIVERSITY'],
+  ['BUM1153', 1, 1, 'MATHS'],
+  ['BUM1233', 1, 1, 'MATHS'],
+  ['BCN1043', 1, 1, 'FACULTY'],
+  ['BCI1143', 1, 1, 'FACULTY'],
+  ['BCS1033', 1, 1, 'FACULTY'],
+
+  // Year 1 Sem 2
+  ['UQA2002', 1, 2, 'UNIVERSITY'],
+  ['ULE1310', 1, 2, 'UNIVERSITY'],
+  ['ULE1322', 1, 2, 'UNIVERSITY'],
+  ['BUM1433', 1, 2, 'MATHS'],
+  ['BCI2023', 1, 2, 'FACULTY'],
+  ['BCN1053', 1, 2, 'FACULTY'],
+  ['BCI1023', 1, 2, 'FACULTY'],
+  ['BCS1133', 1, 2, 'FACULTY'],
+
+  // Year 2 Sem 3
+  ['ULA1312', 2, 1, 'UNIVERSITY_ELECTIVE'],
+  ['ULM1312', 2, 1, 'UNIVERSITY_ELECTIVE'],
+  ['ULJ1312', 2, 1, 'UNIVERSITY_ELECTIVE'],
+  ['UHC2022', 2, 1, 'UNIVERSITY'],
+  ['ULE2332', 2, 1, 'UNIVERSITY'],
+  ['BCI1093', 2, 1, 'FACULTY'],
+  ['BCS2143', 2, 1, 'FACULTY'],
+  ['BCS2173', 2, 1, 'FACULTY'],
+  ['BCS2233', 2, 1, 'PROGRAM'],
+
+  // Year 2 Sem 4
+  ['UGE2002', 2, 2, 'UNIVERSITY'],
+  ['BUM2413', 2, 2, 'MATHS'],
+  ['BCN2053', 2, 2, 'FACULTY'],
+  ['BCS2243', 2, 2, 'FACULTY'],
+  ['BCS2313', 2, 2, 'FACULTY'],
+  ['BCS2343', 2, 2, 'PROGRAM'],
+
+  // Year 3 Sem 5
+  ['ULE2342', 3, 1, 'UNIVERSITY'],
+  ['BCI2313', 3, 1, 'FACULTY'],
+  ['BCN2023', 3, 1, 'FACULTY'],
+  ['BCS2213', 3, 1, 'PROGRAM'],
+  ['BCS3203', 3, 1, 'PROGRAM_ELECTIVE'],
+  ['BCS3233', 3, 1, 'PROGRAM'],
+
+  // Year 3 Sem 6
+  ['UEE3112', 3, 2, 'UNIVERSITY_ELECTIVE'],
+  ['UEE3122', 3, 2, 'UNIVERSITY_ELECTIVE'],
+  ['BCC3012', 3, 2, 'FACULTY'],
+  ['BCS3303', 3, 2, 'PROGRAM_ELECTIVE'],
+  ['BCS3143', 3, 2, 'PROGRAM'],
+  ['BCS3153', 3, 2, 'PROGRAM'],
+  ['BCS3133', 3, 2, 'PROGRAM'],
+
+  // Year 4 Sem 7
+  ['UEE4212', 4, 1, 'UNIVERSITY_ELECTIVE'],
+  ['UEE4222', 4, 1, 'UNIVERSITY_ELECTIVE'],
+  ['BCC3024', 4, 1, 'FACULTY'],
+  ['BCS4203', 4, 1, 'PROGRAM_ELECTIVE'],
+  ['BCS3263', 4, 1, 'PROGRAM'],
+
+  // Year 4 Sem 8
+  ['BCC4012', 4, 2, 'FACULTY'],
+] as const;
+
+const lecturers = [
+  { id: 'L001', name: 'Dr. Aina Rahman', email: 'aina.rahman@umpsa.edu.my', faculty: 'Faculty of Computing' },
+  { id: 'L002', name: 'Dr. Lim Wei Jian', email: 'lim.weijian@umpsa.edu.my', faculty: 'Faculty of Computing' },
+  { id: 'L003', name: 'Assoc. Prof. Ts. Mohd Hakim', email: 'hakim@umpsa.edu.my', faculty: 'Faculty of Computing' },
+  { id: 'L004', name: 'Dr. Nurul Izzati', email: 'nurul.izzati@umpsa.edu.my', faculty: 'Faculty of Computing' },
+  { id: 'L005', name: 'Dr. Chong Mei Ling', email: 'chong.meiling@umpsa.edu.my', faculty: 'Faculty of Computing' },
+  { id: 'L006', name: 'Dr. Farid Hassan', email: 'farid.hassan@umpsa.edu.my', faculty: 'Faculty of Computing' },
+  { id: 'L007', name: 'Dr. Siti Mariam', email: 'siti.mariam@umpsa.edu.my', faculty: 'Faculty of Computing' },
+  { id: 'L008', name: 'Dr. Tan Kai Jun', email: 'tan.kaijun@umpsa.edu.my', faculty: 'Faculty of Computing' },
+];
+
+const venues = ['DK-01', 'DK-02', 'DK-03', 'BK-11', 'BK-12', 'LAB-01', 'LAB-02', 'LAB-03', 'SEMINAR-1', 'SEMINAR-2'];
+
+const timePatterns = [
+  // All classes strictly follow 2-hour blocks only:
+  // 08:00-10:00, 10:00-12:00, 12:00-14:00, 14:00-16:00, 16:00-18:00
+  [{ dayOfWeek: 1, startTime: 800, endTime: 1000 }],
+  [{ dayOfWeek: 1, startTime: 1000, endTime: 1200 }],
+  [{ dayOfWeek: 1, startTime: 1200, endTime: 1400 }],
+  [{ dayOfWeek: 1, startTime: 1400, endTime: 1600 }],
+  [{ dayOfWeek: 1, startTime: 1600, endTime: 1800 }],
+
+  [{ dayOfWeek: 2, startTime: 800, endTime: 1000 }],
+  [{ dayOfWeek: 2, startTime: 1000, endTime: 1200 }],
+  [{ dayOfWeek: 2, startTime: 1200, endTime: 1400 }],
+  [{ dayOfWeek: 2, startTime: 1400, endTime: 1600 }],
+  [{ dayOfWeek: 2, startTime: 1600, endTime: 1800 }],
+
+  [{ dayOfWeek: 3, startTime: 800, endTime: 1000 }],
+  [{ dayOfWeek: 3, startTime: 1000, endTime: 1200 }],
+  [{ dayOfWeek: 3, startTime: 1200, endTime: 1400 }],
+  [{ dayOfWeek: 3, startTime: 1400, endTime: 1600 }],
+  [{ dayOfWeek: 3, startTime: 1600, endTime: 1800 }],
+
+  [{ dayOfWeek: 4, startTime: 800, endTime: 1000 }],
+  [{ dayOfWeek: 4, startTime: 1000, endTime: 1200 }],
+  [{ dayOfWeek: 4, startTime: 1200, endTime: 1400 }],
+  [{ dayOfWeek: 4, startTime: 1400, endTime: 1600 }],
+  [{ dayOfWeek: 4, startTime: 1600, endTime: 1800 }],
+
+  [{ dayOfWeek: 5, startTime: 800, endTime: 1000 }],
+  [{ dayOfWeek: 5, startTime: 1000, endTime: 1200 }],
+  [{ dayOfWeek: 5, startTime: 1200, endTime: 1400 }],
+  [{ dayOfWeek: 5, startTime: 1400, endTime: 1600 }],
+  [{ dayOfWeek: 5, startTime: 1600, endTime: 1800 }],
+];
+
+function gradePointFromGrade(grade: string) {
+  const map: Record<string, number> = {
+    A: 4.0,
+    'A-': 3.67,
+    'B+': 3.33,
+    B: 3.0,
+    'B-': 2.67,
+    'C+': 2.33,
+    C: 2.0,
+    D: 1.0,
+    F: 0.0,
+  };
+
+  return map[grade] ?? 0;
+}
+
+async function resetDatabase() {
+  await prisma.enrollment.deleteMany();
+  await prisma.timeSlot.deleteMany();
+  await prisma.section.deleteMany();
+  await prisma.catalogItem.deleteMany();
+  await prisma.prerequisite.deleteMany();
+  await prisma.course.deleteMany();
+  await prisma.user.deleteMany();
+  await prisma.systemSetting.deleteMany();
+}
+
+async function seedSystemSetting() {
+  await prisma.systemSetting.create({
+    data: {
+      id: 1,
+      activeSemester: ACTIVE_SEMESTER,
+      isRegistrationOpen: true,
+    },
+  });
+}
+
+async function seedUsers() {
+  await prisma.user.createMany({
+    data: [
+      {
+        id: 'PA001',
+        name: 'Dr. Nadia Sofea',
+        email: 'nadia.sofea@umpsa.edu.my',
+        contact: '09-4311001',
+        role: 'PA',
+        faculty: 'Faculty of Computing',
+        program: 'BCS',
+      },
+      {
+        id: 'ADMIN001',
+        name: 'Academic Admin',
+        email: 'academic.admin@umpsa.edu.my',
+        contact: '09-4311000',
+        role: 'ADMIN',
+        faculty: 'Academic Management Division',
+        program: null,
+      },
+      {
+        id: 'CB24184',
+        name: 'NG TIAN XI',
+        email: 'cb24184@student.umpsa.edu.my',
+        contact: '012-3456789',
+        role: 'STUDENT',
+        faculty: 'Faculty of Computing',
+        program: 'BCS',
+        intakeYear: 2024,
+        currentSem: 2,
+        advisorId: 'PA001',
+      },
+      {
+        id: 'CB25001',
+        name: 'AARON LIM',
+        email: 'cb25001@student.umpsa.edu.my',
+        contact: '012-2500001',
+        role: 'STUDENT',
+        faculty: 'Faculty of Computing',
+        program: 'BCS',
+        intakeYear: 2025,
+        currentSem: 1,
+        advisorId: 'PA001',
+      },
+      {
+        id: 'CB24001',
+        name: 'NUR AISYAH BINTI RAZAK',
+        email: 'cb24001@student.umpsa.edu.my',
+        contact: '012-2400001',
+        role: 'STUDENT',
+        faculty: 'Faculty of Computing',
+        program: 'BCS',
+        intakeYear: 2024,
+        currentSem: 3,
+        advisorId: 'PA001',
+      },
+      {
+        id: 'CB24002',
+        name: 'CHONG KAI MING',
+        email: 'cb24002@student.umpsa.edu.my',
+        contact: '012-2400002',
+        role: 'STUDENT',
+        faculty: 'Faculty of Computing',
+        program: 'BCS',
+        intakeYear: 2024,
+        currentSem: 3,
+        advisorId: 'PA001',
+      },
+      ...lecturers.map((lecturer) => ({
+        id: lecturer.id,
+        name: lecturer.name,
+        email: lecturer.email,
+        contact: `09-43120${lecturer.id.replace('L', '')}`,
+        role: 'LECTURER',
+        faculty: lecturer.faculty,
+        program: 'BCS',
+      })),
+    ],
+  });
+}
+
+async function seedCourses() {
+  await prisma.course.createMany({ data: courses });
+}
+
+async function seedPrerequisites() {
+  await prisma.prerequisite.createMany({
+    data: prerequisites.map(([courseCode, prerequisiteCode]) => ({
+      courseCode,
+      prerequisiteCode,
+    })),
+  });
+}
+
+async function seedCatalogItems() {
+  await prisma.catalogItem.createMany({
+    data: catalogItems.map(([courseCode, year, semester, courseType]) => ({
+      programCode: 'BCS',
+      year,
+      semester,
+      courseType,
+      courseCode,
+    })),
+  });
+}
+
+async function createSection(courseCode: string, sectionNumber: string, patternIndex: number, lecturerIndex: number, capacity: number, semester = ACTIVE_SEMESTER) {
+  const section = await prisma.section.create({
+    data: {
+      sectionNumber,
+      capacity,
+      venue: venues[patternIndex % venues.length],
+      semester,
+      courseCode,
+      lecturerId: lecturers[lecturerIndex % lecturers.length].id,
+    },
+  });
+
+  const pattern = timePatterns[patternIndex % timePatterns.length];
+
+  await prisma.timeSlot.createMany({
+    data: pattern.map((slot) => ({
+      ...slot,
+      sectionId: section.id,
+    })),
+  });
+
+  return section;
+}
+
+async function seedSections() {
+  let index = 0;
+
+  // Generate sections for both the previous semester and current semester.
+  // Previous semester is needed because CB24184 has PASSED history in 2425-SEM1.
+  const semesters = ['2425-SEM1', ACTIVE_SEMESTER];
+
+  for (const semester of semesters) {
+    for (const course of courses) {
+      await createSection(course.courseCode, '01', index, index, 35, semester);
+      await createSection(course.courseCode, '02', index + 3, index + 1, 35, semester);
+      await createSection(course.courseCode, '03', index + 6, index + 2, 30, semester);
+
+      index += 1;
+    }
+  }
+
+  // Extra deliberately crowded sections for hackathon demo.
+  // These are useful to show that AI can skip full sections and pick another one.
+  const demoCourses = ['BCI1023', 'BCS1133', 'BCI2023', 'BCN1053', 'BUM1433'];
+  for (const courseCode of demoCourses) {
+    await createSection(courseCode, '04', index + 2, index + 4, 1, ACTIVE_SEMESTER);
+    index += 1;
+  }
+}
+
+async function findSection(courseCode: string, sectionNumber = '01', semester = ACTIVE_SEMESTER) {
+  const section = await prisma.section.findFirst({
+    where: {
+      courseCode,
+      sectionNumber,
+      semester,
+    },
+  });
+
+  if (!section) {
+    throw new Error(`Section not found: ${courseCode} Section ${sectionNumber}`);
+  }
+
+  return section;
+}
+
+async function enrollStudent(params: {
+  userId: string;
+  courseCode: string;
+  sectionNumber?: string;
+  semester: string;
+  status: string;
+  grade?: string;
+}) {
+  const section = await findSection(params.courseCode, params.sectionNumber ?? '01', params.semester);
+
+  await prisma.enrollment.create({
+    data: {
+      userId: params.userId,
+      sectionId: section.id,
+      courseCode: params.courseCode, // Requires courseCode field in Enrollment model.
+      semester: params.semester,
+      status: params.status,
+      grade: params.grade ?? null,
+      gradePoint: params.grade ? gradePointFromGrade(params.grade) : null,
+    },
+  });
+}
+
+async function seedStudentHistory() {
+  // =====================================================
+  // Main demo user: CB24184 / NG TIAN XI
+  // Currently Year 1 Semester 2.
+  // Year 1 Sem 1 mostly completed, but BCS1033 is intentionally not taken yet.
+  // This lets recommendation show both Year 1 Sem 2 courses and missed Year 1 Sem 1 courses.
+  // =====================================================
+
+  await enrollStudent({ userId: 'CB24184', courseCode: 'UHC1012', semester: '2425-SEM1', status: 'PASSED', grade: 'A-' });
+  await enrollStudent({ userId: 'CB24184', courseCode: 'UHC1032', semester: '2425-SEM1', status: 'PASSED', grade: 'B+' });
+  await enrollStudent({ userId: 'CB24184', courseCode: 'BUM1153', semester: '2425-SEM1', status: 'PASSED', grade: 'B' });
+  await enrollStudent({ userId: 'CB24184', courseCode: 'BUM1233', semester: '2425-SEM1', status: 'PASSED', grade: 'A-' });
+  await enrollStudent({ userId: 'CB24184', courseCode: 'BCN1043', semester: '2425-SEM1', status: 'PASSED', grade: 'B+' });
+  await enrollStudent({ userId: 'CB24184', courseCode: 'BCI1143', semester: '2425-SEM1', status: 'PASSED', grade: 'A' });
+
+  // Current semester sample enrollment.
+  // Leave most Year 1 Sem 2 courses open so AI recommendation has useful output.
+  await enrollStudent({ userId: 'CB24184', courseCode: 'ULE1310', semester: ACTIVE_SEMESTER, status: 'APPROVED', sectionNumber: '01' });
+
+  // =====================================================
+  // User 1: CB25001
+  // Year 1 Semester 1, no courses registered yet.
+  // Use this account to test fresh-student recommendation.
+  // Expected recommendation: Year 1 Sem 1 catalog courses.
+  // =====================================================
+
+  // Intentionally no Enrollment for CB25001.
+
+  // =====================================================
+  // User 2: CB24001
+  // Year 2 Semester 1, already completed all Year 1 courses.
+  // Use this account to test normal Year 2 Sem 1 recommendation.
+  // Expected recommendation: Year 2 Sem 1 catalog courses such as BCI1093, BCS2143, BCS2173, BCS2233, etc.
+  // =====================================================
+
+  const year1Sem1Courses = ['UHC1012', 'UHC1032', 'BUM1153', 'BUM1233', 'BCN1043', 'BCI1143', 'BCS1033'];
+  const year1Sem2Courses = ['UQA2002', 'ULE1310', 'ULE1322', 'BUM1433', 'BCI2023', 'BCN1053', 'BCI1023', 'BCS1133'];
+
+  for (const courseCode of year1Sem1Courses) {
+    await enrollStudent({ userId: 'CB24001', courseCode, semester: '2425-SEM1', status: 'PASSED', grade: 'B+' });
+  }
+
+  for (const courseCode of year1Sem2Courses) {
+    await enrollStudent({ userId: 'CB24001', courseCode, semester: ACTIVE_SEMESTER, status: 'PASSED', grade: 'A-' });
+  }
+
+  // =====================================================
+  // User 3: CB24002
+  // Year 2 Semester 1, has failed subject from Year 1.
+  // BCI1023 Programming Technique is failed.
+  // This is useful because BCI1023 blocks BCI1093, BCS2143, BCS2243, and BCI2313.
+  // Expected behavior: AI should remind retake and avoid recommending locked courses unless retake is handled.
+  // =====================================================
+
+  for (const courseCode of year1Sem1Courses) {
+    await enrollStudent({ userId: 'CB24002', courseCode, semester: '2425-SEM1', status: 'PASSED', grade: 'B' });
+  }
+
+  const cb24002PassedSem2 = ['UQA2002', 'ULE1310', 'ULE1322', 'BUM1433', 'BCI2023', 'BCN1053', 'BCS1133'];
+
+  for (const courseCode of cb24002PassedSem2) {
+    await enrollStudent({ userId: 'CB24002', courseCode, semester: ACTIVE_SEMESTER, status: 'PASSED', grade: 'B' });
+  }
+
+  await enrollStudent({ userId: 'CB24002', courseCode: 'BCI1023', semester: ACTIVE_SEMESTER, status: 'FAILED', grade: 'F' });
+
+  // =====================================================
+  // Dummy students to fill selected sections.
+  // These create FULL sections for AI full-class fallback demo.
+  // =====================================================
+
+  await prisma.user.createMany({
+    data: Array.from({ length: 8 }).map((_, i) => ({
+      id: `CB24${200 + i}`,
+      name: `Demo Student ${i + 1}`,
+      email: `demo.student${i + 1}@student.umpsa.edu.my`,
+      contact: `012-88888${i}`,
+      role: 'STUDENT',
+      faculty: 'Faculty of Computing',
+      program: 'BCS',
+      intakeYear: 2024,
+      currentSem: 2,
+      advisorId: 'PA001',
+    })),
+  });
+
+  // Fill section 04 with capacity 1 to simulate FULL section.
+  const fullSectionCourses = ['BCI1023', 'BCS1133', 'BCI2023', 'BCN1053', 'BUM1433'];
+  for (let i = 0; i < fullSectionCourses.length; i++) {
+    const courseCode = fullSectionCourses[i];
+    const section = await findSection(courseCode, '04', ACTIVE_SEMESTER);
+
+    await prisma.enrollment.create({
+      data: {
+        userId: `CB24${200 + i}`,
+        sectionId: section.id,
+        courseCode,
+        semester: ACTIVE_SEMESTER,
+        status: 'APPROVED',
+      },
+    });
+  }
+}
 
 async function main() {
-  console.log('🌱 开始清理旧数据...')
-  await prisma.enrollment.deleteMany()
-  await prisma.timeSlot.deleteMany()
-  await prisma.section.deleteMany()
-  await prisma.prerequisite.deleteMany()
-  await prisma.catalogItem.deleteMany()
-  await prisma.course.deleteMany()
-  await prisma.user.deleteMany()
-  await prisma.systemSetting.deleteMany()
+  console.log('Resetting database...');
+  await resetDatabase();
 
-  // 1. 系统设置
-  console.log('⚙️ 初始化系统环境 (2526-SEM1)...')
-  await prisma.systemSetting.create({
-    data: { id: 1, activeSemester: '2526-SEM1', isRegistrationOpen: true }
-  })
+  console.log('Seeding system setting...');
+  await seedSystemSetting();
 
-  // 2. 用户设定
-  console.log('👤 创建测试用户...')
-  const paHong = await prisma.user.create({
-    data: { id: 'STF001', name: 'Dr. Hong', email: 'hong@umpsa.edu.my', role: 'PA', faculty: 'Faculty of Computing' }
-  })
-  // 用于教其他课的虚拟讲师
-  const lecturerAli = await prisma.user.create({
-    data: { id: 'STF002', name: 'Dr. Ali', email: 'ali@umpsa.edu.my', role: 'LECTURER', faculty: 'Faculty of Computing' }
-  })
+  console.log('Seeding users...');
+  await seedUsers();
 
-  const studentTianXi = await prisma.user.create({
-    data: {
-      id: 'CB24184', name: 'NG TIAN XI', email: 'cb24184@student.umpsa.edu.my',
-      role: 'STUDENT', faculty: 'Faculty of Computing', program: 'Software Engineering',
-      advisorId: paHong.id
-    }
-  })
+  console.log('Seeding courses...');
+  await seedCourses();
 
-  // 3. 全量课程大字典
-  console.log('📚 正在大批量注入全系课程...')
-  const courses = [
-    // University Courses
-    { code: 'UHC1012', name: 'Falsafah dan Isu Semasa', faculty: 'University', program: 'UNIVERSITI', credit: 2 },
-    { code: 'UHC1032', name: 'Kursus Integriti dan Anti-Rasuah', faculty: 'University', program: 'UNIVERSITI', credit: 2 },
-    { code: 'UQA2002', name: 'Co-Curriculum', faculty: 'University', program: 'UNIVERSITI', credit: 2 },
-    { code: 'ULE1310', name: 'Fundamental of English Language', faculty: 'University', program: 'UNIVERSITI', credit: 0 },
-    { code: 'ULE1322', name: 'English for Academic Communications', faculty: 'University', program: 'UNIVERSITI', credit: 2 },
-    { code: 'UHL2412', name: 'Foreign Language (Mandarin)', faculty: 'University', program: 'UNIVERSITI', credit: 2 },
-    { code: 'UHC2022', name: 'Penghayatan Etika & Peradaban', faculty: 'University', program: 'UNIVERSITI', credit: 2 },
-    { code: 'ULE2332', name: 'English for Technical Communications', faculty: 'University', program: 'UNIVERSITI', credit: 2 },
-    { code: 'UGE2002', name: 'Technopreneurship', faculty: 'University', program: 'UNIVERSITI', credit: 2 },
-    { code: 'ULE2342', name: 'English for Professional Communication', faculty: 'University', program: 'UNIVERSITI', credit: 2 },
-    { code: 'UEE3012', name: 'Kursus Elektif Sains Sosial 1', faculty: 'University', program: 'UNIVERSITI', credit: 2 },
-    { code: 'UEE4012', name: 'Kursus Elektif Sains Sosial 2', faculty: 'University', program: 'UNIVERSITI', credit: 2 },
-    
-    // Maths Courses
-    { code: 'BUM1153', name: 'Intermediate Mathematics', faculty: 'Maths', program: 'UNIVERSITI', credit: 3 },
-    { code: 'BUM1233', name: 'Discrete Mathematics & Applications', faculty: 'Maths', program: 'UNIVERSITI', credit: 3 },
-    { code: 'BUM1433', name: 'Discrete Structure & Application', faculty: 'Maths', program: 'UNIVERSITI', credit: 3 },
-    { code: 'BUM2413', name: 'Applied Statistics', faculty: 'Maths', program: 'UNIVERSITI', credit: 3 },
+  console.log('Seeding prerequisites...');
+  await seedPrerequisites();
 
-    // Core Faculty Courses
-    { code: 'BCN1043', name: 'Computer Architecture & Organization', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCI1143', name: 'Problem Solving', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCS1033', name: 'Software Engineering', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCI2023', name: 'Database Systems', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCN1053', name: 'Data Communications & Networking', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCI1023', name: 'Programming Technique', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCS1133', name: 'Systems Analysis & Design', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCI1093', name: 'Data Structure & Algorithms', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCS2143', name: 'Object Oriented Programming', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCS2173', name: 'Human Computer Interaction', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCN2053', name: 'Operating Systems', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCS2243', name: 'Web Engineering', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCS2313', name: 'Artificial Intelligence Techniques', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCI2313', name: 'Algorithm & Complexity', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCN2023', name: 'Data & Network Security', faculty: 'Core Faculty', program: 'BCS', credit: 3 },
-    { code: 'BCC3012', name: 'Undergraduate Project I', faculty: 'Core Faculty', program: 'BCS', credit: 2 },
-    { code: 'BCC3024', name: 'Undergraduate Project II', faculty: 'Core Faculty', program: 'BCS', credit: 4 },
-    { code: 'BCC4012', name: 'Industrial Training', faculty: 'Core Faculty', program: 'BCS', credit: 12 },
+  console.log('Seeding catalog items...');
+  await seedCatalogItems();
 
-    // Core Program (Software Engineering)
-    { code: 'BCS2233', name: 'Software Requirement Workshop', faculty: 'Software Engineering', program: 'Software Engineering', credit: 3 },
-    { code: 'BCS2343', name: 'Software Design Workshop', faculty: 'Software Engineering', program: 'Software Engineering', credit: 3 },
-    { code: 'BCS2213', name: 'Formal Method', faculty: 'Software Engineering', program: 'Software Engineering', credit: 3 },
-    { code: 'BCS3233', name: 'Software Testing', faculty: 'Software Engineering', program: 'Software Engineering', credit: 3 },
-    { code: 'BCS3143', name: 'Software Project Management', faculty: 'Software Engineering', program: 'Software Engineering', credit: 3 },
-    { code: 'BCS3153', name: 'Software Evolution & Maintenance', faculty: 'Software Engineering', program: 'Software Engineering', credit: 3 },
-    { code: 'BCS3133', name: 'Software Engineering Practices', faculty: 'Software Engineering', program: 'Software Engineering', credit: 3 },
-    { code: 'BCS3263', name: 'Software Quality Assurance', faculty: 'Software Engineering', program: 'Software Engineering', credit: 3 },
-    
-    // Virtual Electives
-    { code: 'BCS2423', name: 'Elective 1: Mobile App Dev', faculty: 'Software Engineering', program: 'Software Engineering', credit: 3 },
-    { code: 'BCS3453', name: 'Elective 2: Cloud Computing', faculty: 'Software Engineering', program: 'Software Engineering', credit: 3 },
-    { code: 'BCS3463', name: 'Elective 3: Game Development', faculty: 'Software Engineering', program: 'Software Engineering', credit: 3 }
-  ];
+  console.log('Seeding sections and time slots...');
+  await seedSections();
 
-  for (const c of courses) {
-    await prisma.course.create({ data: { courseCode: c.code, courseName: c.name, faculty: c.faculty, program: c.program, creditHours: c.credit } })
-  }
+  console.log('Seeding student history and demo enrollments...');
+  await seedStudentHistory();
 
-  // 4. 精准的前置规则绑定 (Prerequisites)
-  console.log('🔗 绑定全校先修课规则...')
-  const preReqs = [
-    { code: 'ULE2332', req: 'ULE1322' }, { code: 'ULE2342', req: 'ULE2332' },
-    { code: 'BCI1023', req: 'BCI1143' }, { code: 'BCI1093', req: 'BCI1023' },
-    { code: 'BCS2143', req: 'BCI1023' }, { code: 'BCS2143', req: 'BCS1133' },
-    { code: 'BCS2173', req: 'BCS1033' }, { code: 'BCS2243', req: 'BCI1023' },
-    { code: 'BCS2243', req: 'BCS1133' }, { code: 'BCS2313', req: 'BCI1093' },
-    { code: 'BCS2313', req: 'BUM1233' }, { code: 'BCI2313', req: 'BCI1023' },
-    { code: 'BCI2313', req: 'BCI1093' }, { code: 'BCN2023', req: 'BCN1053' },
-    { code: 'BCC3024', req: 'BCC3012' }, { code: 'BCS2233', req: 'BCS1133' },
-    { code: 'BCS2343', req: 'BCS2233' }, { code: 'BCS2213', req: 'BUM1233' },
-    { code: 'BCS2213', req: 'BCS2233' }, { code: 'BCS3233', req: 'BCS1133' },
-    { code: 'BCS3143', req: 'BCS2343' }, { code: 'BCS3143', req: 'BCS3233' },
-    { code: 'BCS3153', req: 'BCS3233' }, { code: 'BCS3153', req: 'BCS2343' },
-    { code: 'BCS3133', req: 'BCS2343' }, { code: 'BCS3263', req: 'BCS3233' },
-  ];
-
-  for (const pr of preReqs) {
-    await prisma.prerequisite.create({ data: { courseCode: pr.code, prerequisiteCode: pr.req } })
-  }
-
-  // 5. 培养方案 (Catalog Y1S1 到 Y4S2)
-  console.log('📖 生成完整的大学 4 年 Course Catalog...')
-  const catalogDefinition = [
-    { sem: 'Y1S1', courses: ['UHC1012', 'UHC1032', 'BUM1153', 'BUM1233', 'BCN1043', 'BCI1143', 'BCS1033'] },
-    { sem: 'Y1S2', courses: ['UQA2002', 'ULE1310', 'ULE1322', 'BUM1433', 'BCI2023', 'BCN1053', 'BCI1023', 'BCS1133'] },
-    { sem: 'Y2S1', courses: ['UHL2412', 'UHC2022', 'ULE2332', 'BCI1093', 'BCS2143', 'BCS2173', 'BCS2233'] }, // <-- 这是你的主战场
-    { sem: 'Y2S2', courses: ['UGE2002', 'BUM2413', 'BCN2053', 'BCS2243', 'BCS2313', 'BCS2343'] },
-    { sem: 'Y3S1', courses: ['ULE2342', 'BCI2313', 'BCN2023', 'BCS2213', 'BCS2423', 'BCS3233'] },
-    { sem: 'Y3S2', courses: ['UEE3012', 'BCC3012', 'BCS3453', 'BCS3143', 'BCS3153', 'BCS3133'] },
-    { sem: 'Y4S1', courses: ['UEE4012', 'BCC3024', 'BCS3463', 'BCS3263'] },
-    { sem: 'Y4S2', courses: ['BCC4012'] }
-  ];
-
-  for (const cat of catalogDefinition) {
-    for (const code of cat.courses) {
-      await prisma.catalogItem.create({ data: { programName: 'Software Engineering', recommendedSemester: cat.sem, courseCode: code } })
-    }
-  }
-
-  // 6. 自动化海量排课引擎 (自动为每一门课生成 2 个班级和随机时间)
-  console.log('⏰ 启动超级排课引擎：自动生成全校班级与时间表...')
-  const demoCourses = ['BCS2173', 'BCS2143', 'BCI1023']; // 排除这三门用于演示的核心冲突课
-
-  for (const c of courses) {
-    if (demoCourses.includes(c.code)) continue;
-
-    // 为每门课自动创建 Section 01
-    const t1 = getRandomTimeSlot();
-    await prisma.section.create({
-      data: {
-        sectionNumber: '01', capacity: 30, venue: `DK-${getRandomDay()}${Math.floor(Math.random()*10)}`, semester: '2526-SEM1', courseCode: c.code, lecturerId: lecturerAli.id,
-        timeSlots: { create: [{ dayOfWeek: getRandomDay(), startTime: t1.start, endTime: t1.end }] }
-      }
-    });
-
-    // 为每门课自动创建 Section 02
-    const t2 = getRandomTimeSlot();
-    await prisma.section.create({
-      data: {
-        sectionNumber: '02', capacity: 30, venue: `Lab-${getRandomDay()}${Math.floor(Math.random()*10)}`, semester: '2526-SEM1', courseCode: c.code, lecturerId: lecturerAli.id,
-        timeSlots: { create: [{ dayOfWeek: getRandomDay(), startTime: t2.start, endTime: t2.end }] }
-      }
-    });
-  }
-
-  // ==========================================
-  // 🌟 路演剧本：精心设计的冲突局与退路 🌟
-  // ==========================================
-  // HCI (BCS2173) 只有一个班：周一 08:00 - 10:00
-  await prisma.section.create({
-    data: {
-      sectionNumber: '01', capacity: 30, venue: 'WDK01', semester: '2526-SEM1', courseCode: 'BCS2173', lecturerId: paHong.id,
-      timeSlots: { create: [{ dayOfWeek: 1, startTime: 800, endTime: 1000 }] }
-    }
-  })
-
-  // OOP (BCS2143) Sec 01：周一 08:00 - 10:00 (🔥 致命撞车！)
-  await prisma.section.create({
-    data: {
-      sectionNumber: '01', capacity: 30, venue: 'WDK02', semester: '2526-SEM1', courseCode: 'BCS2143', lecturerId: paHong.id,
-      timeSlots: { create: [{ dayOfWeek: 1, startTime: 800, endTime: 1000 }] }
-    }
-  })
-  // OOP (BCS2143) Sec 02：周四 14:00 - 16:00 (✅ AI 救命退路)
-  await prisma.section.create({
-    data: {
-      sectionNumber: '02', capacity: 30, venue: 'WDK03', semester: '2526-SEM1', courseCode: 'BCS2143', lecturerId: paHong.id,
-      timeSlots: { create: [{ dayOfWeek: 4, startTime: 1400, endTime: 1600 }] }
-    }
-  })
-
-  // 重修班 Programming Technique (BCI1023) Sec 01：周三 10:00 - 12:00
-  await prisma.section.create({
-    data: {
-      sectionNumber: '01', capacity: 30, venue: 'Lab 1', semester: '2526-SEM1', courseCode: 'BCI1023', lecturerId: paHong.id,
-      timeSlots: { create: [{ dayOfWeek: 3, startTime: 1000, endTime: 1200 }] } 
-    }
-  })
-  await prisma.section.create({
-    data: {
-      sectionNumber: '02', capacity: 30, venue: 'Lab 2', semester: '2526-SEM1', courseCode: 'BCI1023', lecturerId: paHong.id,
-      timeSlots: { create: [{ dayOfWeek: 5, startTime: 800, endTime: 1000 }] } 
-    }
-  })
-
-  // 7. 学生历史成绩 (挂科剧本)
-  console.log('📜 写入历史档案，激活拦截系统...')
-  const pastSec1 = await prisma.section.create({ data: { sectionNumber: '01', capacity: 30, venue: 'NA', semester: '2425-SEM2', courseCode: 'BCI1143', lecturerId: paHong.id } })
-  const pastSec2 = await prisma.section.create({ data: { sectionNumber: '01', capacity: 30, venue: 'NA', semester: '2425-SEM2', courseCode: 'BCS1033', lecturerId: paHong.id } })
-  const pastSec3 = await prisma.section.create({ data: { sectionNumber: '01', capacity: 30, venue: 'NA', semester: '2425-SEM2', courseCode: 'BCI1023', lecturerId: paHong.id } })
-
-  await prisma.enrollment.create({ data: { userId: 'CB24184', sectionId: pastSec1.id, semester: '2425-SEM2', status: 'PASSED' } })
-  await prisma.enrollment.create({ data: { userId: 'CB24184', sectionId: pastSec2.id, semester: '2425-SEM2', status: 'PASSED' } })
-  await prisma.enrollment.create({ data: { userId: 'CB24184', sectionId: pastSec3.id, semester: '2425-SEM2', status: 'FAILED' } }) // 挂科触发器
-
-  console.log('🎉 终极系统数据基建完成！您的数据库现在拥有大学规模的数据量。')
+  console.log('Seed completed successfully.');
 }
 
 main()
-  .catch((e) => {
-    console.error(e)
-    process.exit(1)
+  .catch((error) => {
+    console.error('Seed failed:', error);
+    process.exit(1);
   })
   .finally(async () => {
-    await prisma.$disconnect()
-  })
+    await prisma.$disconnect();
+  });

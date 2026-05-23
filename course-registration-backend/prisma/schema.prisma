@@ -12,58 +12,61 @@ datasource db {
 // =========================================
 model SystemSetting {
   id                 Int     @id @default(1) // 
-  activeSemester     String  //  "2425-SEM2"
-  isRegistrationOpen Boolean @default(true) 
+  activeSemester     String //  "2425-SEM2"
+  isRegistrationOpen Boolean @default(true)
 }
 
 // =========================================
 // 1. 用户表 (学生/讲师/PA)
 // =========================================
 model User {
-  id           String       @id //
-  name         String
-  email        String       @unique
-  contact      String?
-  role         String       // "STUDENT", "LECTURER", "PA", "ADMIN"
-  faculty      String
-  program      String?
-  
+  id      String  @id
+  name    String
+  email   String  @unique
+  contact String?
+  role    String // "STUDENT", "LECTURER", "PA", "ADMIN"
+  faculty String
+  program String? // 专业代码，例如 "BCS" 或 "BCN"
 
-  taughtSections Section[]  
-  advisedStudents User[]    @relation("PAStudents") 
-  myAdvisor    User?        @relation("PAStudents", fields: [advisorId], references: [id])
-  advisorId    String?      
-  
-  enrollments  Enrollment[] 
+  // 🌟 新增：学业进度追踪 (仅 STUDENT 角色需要填写)
+  intakeYear Int? // 入学年份，例如 2024
+  currentSem Int? // 当前所处学期，例如 3 (代表大二上学期)
+
+  taughtSections  Section[]
+  advisedStudents User[]    @relation("PAStudents")
+  myAdvisor       User?     @relation("PAStudents", fields: [advisorId], references: [id])
+  advisorId       String?
+
+  enrollments Enrollment[]
 }
 
 // =========================================
 // 2. Course
 // =========================================
 model Course {
-  courseCode   String       @id // 例如 "BCI2233"
-  courseName   String
-  faculty      String       
-  program      String       
-  creditHours  Int          
-  hasLab       Boolean      @default(false) 
+  courseCode  String  @id // 例如 "BCI2233"
+  courseName  String
+  faculty     String
+  program     String
+  creditHours Int
+  hasLab      Boolean @default(false)
 
-  sections     Section[]    
-  
+  sections    Section[]
+  enrollments Enrollment[]
 
-  prerequisites Prerequisite[] @relation("CurrentCourse")
+  prerequisites  Prerequisite[] @relation("CurrentCourse")
   asPrerequisite Prerequisite[] @relation("RequiredPrerequisite")
-  
-  catalogItems  CatalogItem[]
+
+  catalogItems CatalogItem[]
 }
 
 // =========================================
 // course prerequisite
 // =========================================
 model Prerequisite {
-  id                 Int    @id @default(autoincrement())
-  courseCode         String 
-  prerequisiteCode   String 
+  id               Int    @id @default(autoincrement())
+  courseCode       String
+  prerequisiteCode String
 
   course             Course @relation("CurrentCourse", fields: [courseCode], references: [courseCode])
   prerequisiteCourse Course @relation("RequiredPrerequisite", fields: [prerequisiteCode], references: [courseCode])
@@ -73,59 +76,68 @@ model Prerequisite {
 // 4. class section
 // =========================================
 model Section {
-  id            Int          @id @default(autoincrement())
-  sectionNumber String       
-  capacity      Int          
-  venue         String       
-  semester      String       
+  id            Int    @id @default(autoincrement())
+  sectionNumber String
+  capacity      Int
+  venue         String
+  semester      String
 
-  courseCode    String
-  course        Course       @relation(fields: [courseCode], references: [courseCode])
+  courseCode String
+  course     Course @relation(fields: [courseCode], references: [courseCode])
 
-  lecturerId    String       
-  lecturer      User         @relation(fields: [lecturerId], references: [id])
+  lecturerId String
+  lecturer   User   @relation(fields: [lecturerId], references: [id])
 
-  timeSlots     TimeSlot[]   
-  enrollments   Enrollment[] 
+  timeSlots   TimeSlot[]
+  enrollments Enrollment[]
 }
 
 // =========================================
 // 5. Time Slot
 // =========================================
 model TimeSlot {
-  id          Int      @id @default(autoincrement())
-  dayOfWeek   Int      // 1-7 (monday - sunday)
-  startTime   Int      //  800 (08:00)
-  endTime     Int      //  1000 (10:00)
-  
-  sectionId   Int
-  section     Section  @relation(fields: [sectionId], references: [id])
+  id        Int @id @default(autoincrement())
+  dayOfWeek Int // 1-7 (monday - sunday)
+  startTime Int //  800 (08:00)
+  endTime   Int //  1000 (10:00)
+
+  sectionId Int
+  section   Section @relation(fields: [sectionId], references: [id])
 }
 
 // =========================================
 // 6. Course Catalog
 // =========================================
 model CatalogItem {
-  id                  Int    @id @default(autoincrement())
-  programName         String 
-  recommendedSemester String 
-  
-  courseCode          String
-  course              Course @relation(fields: [courseCode], references: [courseCode])
+  id          Int    @id @default(autoincrement())
+  programCode String // 🌟 关联的专业，例如 "BCS"
+  year        Int // 🌟 推荐大几修读 (1, 2, 3, 4)
+  semester    Int // 🌟 推荐该年的第几学期修读 (1 或 2)
+  courseType  String @default("CORE") // 🌟 "CORE" (核心必修) 或 "ELECTIVE" (选修)
+
+  courseCode String
+  course     Course @relation(fields: [courseCode], references: [courseCode])
+
+  // 🌟 联合唯一约束：同一个专业的一门课，在培养手册里只能出现一次
+  @@unique([programCode, courseCode])
 }
 
 // =========================================
 // 7. course enrollment
 // =========================================
 model Enrollment {
-  id         Int      @id @default(autoincrement())
-  userId     String   
+  id         Int     @id @default(autoincrement())
+  userId     String
+  courseCode String
   sectionId  Int
-  semester   String   
-  
-  // status：PASSED, FAILED, PENDING_PA, APPROVED
-  status     String   @default("PENDING_PA") 
+  semester   String
+  status     String  @default("PENDING_PA")
+  grade      String?
+  gradePoint Float?
 
-  user       User     @relation(fields: [userId], references: [id])
-  section    Section  @relation(fields: [sectionId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+  course  Course  @relation(fields: [courseCode], references: [courseCode])
+  section Section @relation(fields: [sectionId], references: [id])
+
+  @@unique([userId, courseCode, semester])
 }

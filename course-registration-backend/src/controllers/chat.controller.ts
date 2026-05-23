@@ -4,11 +4,30 @@ import { prisma } from '../config/prisma';
 import { AuthRequest } from '../middlewares/auth.middleware';
 import { logger } from '../utils/logger';
 
-//
 import { registerCourseAction, dropCourseAction, getStudentTimetable, searchCourseAction, swapCourseAction, recommendPlanAction, checkPrerequisiteAction } from '../services/course.service';
 import { checkStudentProgressAction } from '../services/student.service';
-// initialize Gemini Client
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+import Groq from "groq-sdk";
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const API_KEYS = [
+  process.env.GEMINI_API_KEY,      // 你的 Key
+  process.env.GEMINI_KEY_MEMBER2,  // 队友 A 的 Key
+  process.env.GEMINI_KEY_MEMBER3   // 队友 B 的 Key
+].filter(Boolean) as string[];     // 自动过滤掉没填的空值
+
+let keyIndex = 0;
+
+const getGenAIInstance = () => {
+  if (API_KEYS.length === 0) {
+    throw new Error("没有配置任何 Gemini API Key！");
+  }
+  // 每次调用，指针往前走一步，实现平摊压力
+  const currentKey = API_KEYS[keyIndex % API_KEYS.length];
+  keyIndex++;
+  return new GoogleGenerativeAI(currentKey);
+};
 
 export const handleChat = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -28,296 +47,654 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
       res.status(404).json({ error: 'Student not found' });
       return;
     }
+    const activeSemester = settings?.activeSemester || '2526-SEM1';
 
-    // 找出挂科记录
-    const failedCourses = student.enrollments
+    // 1. 查出这辈子已经及格的课
+    const passedCodes = new Set(student.enrollments.filter(e => e.status === 'PASSED').map(e => e.section.courseCode));
+    
+    // 2. 查出这学期已经成功选上的课 (包括正在等 PA 批的)
+    const currentCodes = new Set(student.enrollments.filter(e => e.semester === activeSemester && ['PENDING_PA', 'APPROVED'].includes(e.status)).map(e => e.section.courseCode));
+
+    // 3. 核心过滤：是挂科的，且后来没及格，且这学期还没选的！
+    const activeFailedCourses = student.enrollments
       .filter(e => e.status === 'FAILED')
+      .filter(e => !passedCodes.has(e.section.courseCode) && !currentCodes.has(e.section.courseCode))
       .map(e => `${e.section.course.courseName} (${e.section.courseCode})`);
 
+    // 4. 去重：防止学生同一门课连续挂两次，导致名字重复出现
+    const uniqueFailedCourses = [...new Set(activeFailedCourses)];
     // ==========================================
     // 2. 构造“绝密纸条” (System Prompt)
     // ==========================================
     let systemPrompt = `
-      你是一个名叫 Laozu 的大学高级教务 AI 中枢。当前学期是 ${settings?.activeSemester}。
-      当前对话学生：${student.name} (学号: ${student.id}, 专业: ${student.program})。
+      You are Laozu, an advanced autonomous university course registration AI system.
+
+      Current active semester: ${settings?.activeSemester}
+
+      Current student:
+      - Name: ${student.name}
+      - Student ID: ${student.id}
+      - Program: ${student.program}
+
+      Your role is NOT just to chat.
+      You are an AI academic assistant capable of:
+      - automatically registering courses
+      - dropping courses
+      - swapping sections
+      - generating study plans
+      - checking prerequisites
+      - checking graduation progress
+      - searching available courses
+      - optimizing timetable arrangements
+
+      ==================================================
+      [CRITICAL FAILED COURSE INFORMATION]
+      ==================================================
     `;
 
-    if (failedCourses.length > 0) {
+    if (uniqueFailedCourses.length > 0) {
       systemPrompt += `
-      [极度重要情报]：该学生上学期挂了以下科目：${failedCourses.join(', ')}。
-      你必须在回复中主动提醒他重修，并询问是否需要帮忙安排这学期的重修班级！
+        This student currently has FAILED courses that require retake:
+        ${uniqueFailedCourses.join(', ')}
+
+        You MUST proactively remind the student about retaking these courses whenever relevant.
       `;
     }
 
     systemPrompt += `
-      [🎓 内部课程字典 (Course Dictionary)]
-      这是本校的课程代码映射表。当学生使用缩写或俗称时，你必须将其翻译为【精准的课程代码】，并填入 actionData.courseCode 中。绝对不能把缩写当作 courseCode 输出！
+      ==================================================
+      [COURSE DICTIONARY]
+      ==================================================
+
+      Translate course nicknames or abbreviations into official course codes.
+
       - OOP / Object Oriented Programming -> BCS2143
       - HCI / Human Computer Interaction -> BCS2173
       - PT / Programming Technique -> BCI1023
       - DS / Data Structure -> BCI1093
 
-      🚨 【极其重要的防幻觉死命令】：
-      如果学生提到的课程名称/缩写不在上述字典中，或者学生根本没有提供明确的课程，你【绝对禁止】自行猜测或编造课程代码！
-      在这种情况下，你必须将 courseCode 的值设为空字符串 ""，并在 reply 中礼貌地要求学生提供准确的课程全名或代码。
-    `;
+      ==================================================
+      [ANTI-HALLUCINATION RULE]
+      ==================================================
 
-    // 🌟 新增：强制语言镜像规则 🌟
-    systemPrompt += `
-      [Language Rule / 语言规则]：
-      You MUST detect the language of the student's message (e.g., English, Chinese, Malay).
-      Your "reply" MUST be in the EXACT SAME LANGUAGE as the student's message.
-      如果你检测到学生输入的是英语，你的高情商回复、重修提醒等所有文本，都必须翻译成流畅的英语。
-      如果你检测到马来语，就用马来语回复。不限制语言。且最好不要太无趣，多一点搞笑也是可以的。
-    `;
+      If the course mentioned by the student:
+      - does not exist in the dictionary
+      - is unclear
+      - ambiguous
+      - incomplete
+      - or uncertain
 
-    // 🌟 1. 强化 AI 的输出要求，逼它吐出 actionData
-    systemPrompt += `
-      [Language Rule / 语言规则]：
-      You MUST detect the language of the student's message (e.g., Chinese, English, Malay).
-      Your "reply" MUST be in the EXACT SAME LANGUAGE as the student's message.
+      Then you MUST:
+      - set courseCode to ""
+      - NEVER invent fake course codes
+      - NEVER guess
 
-      [🎯 核心任务 1：全场景意图分类字典 (Intent Enum)]
-      你必须精准理解学生的需求，并将意图严格归类为以下 9 种之一：
-      
-      1. "REGISTER_COURSE" : 选课/加课。要求报名某门具体课程。
-      2. "DROP_COURSE"     : 退课/删课。要求退选已报名的课程。
-      3. "SWAP_COURSE"     : 换课/调剂。要求把某门课的 A 班换成 B 班，或者拿甲课换乙课。
-      4. "VIEW_TIMETABLE"  : 查课表。要求查看自己当前的课表，或询问“我明天有什么课”。
-      5. "SEARCH_COURSE"   : 搜课/查资讯。仅查询某门课的开班信息、时间、地点、学分，但不要求立刻报名。
-      6. "RECOMMEND_PLAN"  : 智能推荐。不知道该选什么，要求你根据专业、历史成绩推荐选课方案。
-      7. "CHAT"            : 日常闲聊/问候。不属于上述教务操作的普通对话。
-      8. "CHECK_PROGRESS"  : 毕业进度/学分查询。询问自己拿了多少学分、还差什么课、选修课够不够。
-      9. "CHECK_PREREQUISITE": 查先修课。不报名，只是打听某门课的前置要求是什么。
+      ==================================================
+      [LANGUAGE RULE]
+      ==================================================
 
-      [🎯 核心任务 2：时间偏好精准翻译 (Time Preference Parser)]
-      学生经常会提出各种刁钻的上课时间要求。你必须将他们的自然语言翻译成精确的机器参数：
-      - "拜一"到"拜日" / 周一到周日 -> dayOfWeek: 1 到 7
-      - "早八" -> startTime: 800, endTime: 1000
-      - "早上" / "上午" -> startTime: 800, endTime: 1200
-      - "下午" -> startTime: 1200, endTime: 1800
-      - "晚上" -> startTime: 1800, endTime: 2200
+      1. Detect the student's language automatically.
+      2. Your reply MUST be in the EXACT SAME LANGUAGE as the student.
+      3. Ignore system language or backend log language.
+      4. If the student speaks English, reply ONLY in English.
+      5. If the student speaks Chinese, reply ONLY in Chinese.
+      6. If the student speaks Malay, reply ONLY in Malay.
+      7. Natural casual tone is allowed.
+      8. Small humor is allowed.
+      9. If the student reply in "rojak" means mix language, reply in mix language
 
-      [⚠️ 极度严格的输出与免责要求]：
-      1. 必须严格返回合法的 JSON 格式。
-      2. 对于 REGISTER, DROP, SWAP 操作，你的 reply 绝对不能承诺“操作成功”！必须使用“正在向教务系统提交申请...”或“正在尝试为你匹配...”，因为最终的冲突检测由底层系统决定。
+      ==================================================
+      [SUPPORTED INTENTS]
+      ==================================================
 
-      [JSON 数据结构规范]：
-      {
-        "intent": "上述 9 种 Intent 之一",
-        "reply": "你给学生的高情商回复 (遵守语言规则和免责声明)",
-        "actionData": {
-          "courseCode": "目标课程代码(如 BCS2143)。 \"\"，绝对不准乱填！如果是退/换多门课，提取主要的。没有则留空字符串",
-          "targetSection": "用户是否明确指定了班级(如 01, 02)？如果有则提取，没有则留空",
-          
-          "preferences": {
-            "globalAvoidDays": [
-              "整天都不想上课的星期数组。例如不想在星期五和星期四上课，就输出 [4, 5]。没有则输出空数组 []"
-            ],
-            "globalAvoidTimeBefore": "如果用户要求所有日子都不想早起(如不要早八)，输出他们能接受的最早时间，如 1000。没有则输出 0",
-            
-            "avoidSpecificBlocks": [
-              {
-                "description": "这是为了处理『特定天+特定时间』的组合黑名单。例如：不要星期四的早八",
-                "dayOfWeek": 4,
-                "startTime": 800,
-                "endTime": 1000
-              }
-            ],
-            
-            "preferredLecturer": "用户明确想要指定的老师名字，如 'Dr. Hong'。没有则为空字符串",
-            "avoidLecturer": "用户明确要求避雷的老师名字，如 'Dr. Ali'。没有则为空字符串",
-            "maxConsecutiveHours": "用户能忍受的最大连续上课小时数(如连上4小时就受不了了，输出 4)。没提则输出 0",
-            "requireLunchBreak": "布尔值。用户是否强烈要求在 1200-1400 之间必须有休息时间吃饭。没提则为 false",
-            "preferCompactSchedule": "布尔值。用户是否要求把课尽量集中在同几天上完(追求少来学校)。没提则为 false"
-          }
+      You support these intents:
+
+      - REGISTER_COURSE
+      - DROP_COURSE
+      - SWAP_COURSE
+      - VIEW_TIMETABLE
+      - SEARCH_COURSE
+      - RECOMMEND_PLAN
+      - CHAT
+      - CHECK_PROGRESS
+      - CHECK_PREREQUISITE
+
+      ==================================================
+      [PREFERENCE EXTRACTION RULES]
+      ==================================================
+
+      You MUST intelligently extract timetable preferences from natural language.
+
+      ------------------------------------------
+      1. Avoid specific days
+      ------------------------------------------
+
+      Convert days into numbers:
+
+      Monday = 1
+      Tuesday = 2
+      Wednesday = 3
+      Thursday = 4
+      Friday = 5
+      Saturday = 6
+      Sunday = 7
+
+      Examples:
+
+      "Don't want Thursday class"
+      -> globalAvoidDays: [4]
+
+      "不要星期五上课"
+      -> globalAvoidDays: [5]
+
+      ------------------------------------------
+      2. Avoid morning classes
+      ------------------------------------------
+
+      Examples:
+
+      "no 8am class"
+      -> globalAvoidTimeBefore: 900
+
+      "不要早八"
+      -> globalAvoidTimeBefore: 900
+
+      "不要早十"
+      -> globalAvoidTimeBefore: 1100
+
+      "no morning class"
+      -> globalAvoidTimeBefore: 1200
+
+      ------------------------------------------
+      3. Avoid afternoon classes
+      ------------------------------------------
+
+      Examples:
+
+      "不要下午课"
+      -> globalAvoidTimeAfter: 1200
+
+      "no afternoon class"
+      -> globalAvoidTimeAfter: 1200
+
+      ------------------------------------------
+      4. Require lunch break
+      ------------------------------------------
+
+      Examples:
+
+      "I want lunch break"
+      "下午想吃饭"
+      "need break during lunch"
+
+      -> requireLunchBreak: true
+      -> lunchStart: 1200
+      -> lunchEnd: 1400
+
+      ------------------------------------------
+      5. Avoid lecturer
+      ------------------------------------------
+
+      Examples:
+
+      "不要 Dr Tan"
+      -> avoidLecturer: "Dr Tan"
+
+      "don't want lecturer Ali"
+      -> avoidLecturer: "Ali"
+
+      ------------------------------------------
+      6. Preferred lecturer
+      ------------------------------------------
+
+      Examples:
+
+      "I want Dr Wong"
+      -> preferredLecturer: "Dr Wong"
+
+      ------------------------------------------
+      7. Compact timetable
+      ------------------------------------------
+
+      Examples:
+
+      "I want compact schedule"
+      "尽量排在一起"
+
+      -> preferCompactSchedule: true
+
+      ------------------------------------------
+      8. Specific blocked times
+      ------------------------------------------
+
+      Examples:
+
+      "I cannot attend Wednesday 2pm-4pm"
+
+      -> avoidSpecificBlocks:
+      [
+        {
+          "dayOfWeek": 3,
+          "startTime": 1400,
+          "endTime": 1600
         }
+      ]
+
+      ==================================================
+      [COURSE REGISTRATION BEHAVIOR]
+      ==================================================
+
+      When registering courses:
+
+      1. Automatically search for ALL available sections.
+      2. Automatically avoid timetable clashes.
+      3. Automatically avoid FULL sections.
+      4. Automatically switch to another section if needed.
+      5. Prioritize sections matching student preferences.
+      6. If no valid section exists:
+        - explain the reason clearly
+        - do not invent fake successful registrations
+
+      ==================================================
+      [JSON OUTPUT RULE]
+      ==================================================
+
+      You MUST return VALID RAW JSON ONLY.
+
+      DO NOT:
+      - use markdown
+      - use \`\`\`
+      - explain anything outside JSON
+
+      ==================================================
+      [RESPONSE FORMAT]
+      ==================================================
+
+      {
+        "reply": "Natural response to the student",
+        "actions": [
+          {
+            "intent": "REGISTER_COURSE",
+            "actionData": {
+              "courseCode": "BCS2143",
+              "targetSection": "",
+              "preferences": {
+                "globalAvoidDays": [],
+                "globalAvoidTimeBefore": 0,
+                "globalAvoidTimeAfter": 0,
+                "avoidSpecificBlocks": [],
+                "preferredLecturer": "",
+                "avoidLecturer": "",
+                "requireLunchBreak": false,
+                "lunchStart": 1200,
+                "lunchEnd": 1400,
+                "preferCompactSchedule": false
+              }
+            }
+          }
+        ]
       }
-    `;
+      `;
 
-    const model = genAI.getGenerativeModel({ 
-        model: 'gemini-2.5-flash',
-        generationConfig: { responseMimeType: "application/json" } 
-    });
+    // ==========================================
+// 🌟 Gemini + Groq 双 AI 容灾引擎
+// ==========================================
 
-    const finalPrompt = `${systemPrompt}\n\n学生说：${message}`;
-    let result;
+let aiResponse: any;
+
+const safeParseAIJson = (text: string) => {
+  const cleaned = text
+    .replace(/```json/g, "")
+    .replace(/```/g, "")
+    .trim();
+
+  return JSON.parse(cleaned);
+};
+
+try {
+
+  // ==========================================
+  // 1. Gemini 主引擎 (自动重试)
+  // ==========================================
+
+  let geminiSuccess = false;
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+
     try {
-      // 尝试呼叫 Gemini
-      result = await model.generateContent({
+
+      const currentAI = getGenAIInstance();
+
+      const model = currentAI.getGenerativeModel({
+        model: 'gemini-2.5-flash',
+        generationConfig: {
+          responseMimeType: "application/json"
+        }
+      });
+
+      const result = await model.generateContent({
         contents: [
           { role: 'user', parts: [{ text: systemPrompt }] },
           { role: 'model', parts: [{ text: 'Understood. Waiting for user input.' }] },
           { role: 'user', parts: [{ text: message }] }
         ]
       });
-    } catch (apiError: any) {
-      // 🚨 拦截 503 等 API 网络错误，绝对不能让后端死掉！
-      logger.error(`[AI Engine] Gemini API 崩溃或过载:`, apiError.message);
-      
-      // 直接伪造一个友好的 JSON 退回给前端，假装无事发生，并附上当前课表
-      const activeSemester = settings?.activeSemester || '2526-SEM1';
-      const currentTimetable = await getStudentTimetable(studentId, activeSemester);
-      
+
+      const responseText = result.response.text();
+
+      aiResponse = safeParseAIJson(responseText);
+
+      geminiSuccess = true;
+
+      logger.info(`[AI Engine] Gemini 成功响应 (Attempt ${attempt})`);
+
+      break;
+
+    } catch (geminiError: any) {
+
+      logger.error(
+        `[AI Engine] Gemini Attempt ${attempt} 失败:`,
+        geminiError.message
+      );
+
+      await delay(1000 * attempt);
+    }
+  }
+
+  // ==========================================
+  // 2. Gemini 全挂 → Groq 接管
+  // ==========================================
+
+  if (!geminiSuccess) {
+
+    logger.warn("[AI Engine] Gemini 全部失败，切换到 Groq Backup");
+
+    const groqCompletion = await groq.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+
+      messages: [
+        {
+          role: "system",
+          content: `
+            You are a university course registration AI.
+
+            You MUST return VALID JSON ONLY.
+
+            DO NOT return markdown.
+            DO NOT return explanation.
+            DO NOT wrap with \`\`\`.
+
+            Return this format:
+            {
+              "reply": "message",
+              "actions": []
+            }
+          `
+            },
+            {
+              role: "user",
+              content: `
+                ${systemPrompt}
+
+                学生输入：
+                ${message}
+              `
+            }
+          ],
+
+          temperature: 0.2
+        });
+
+        const groqText =
+          groqCompletion.choices[0]?.message?.content || "{}";
+
+        aiResponse = safeParseAIJson(groqText);
+
+        logger.info("[AI Engine] Groq Backup 成功接管");
+      }
+
+    } catch (allAIError: any) {
+
+      logger.error(
+        `[AI Engine] 所有 AI 引擎全部崩溃:`,
+        allAIError.message
+      );
+
+      const currentTimetable = await getStudentTimetable(
+        studentId,
+        activeSemester
+      );
+
       res.status(200).json({
-        intent: "CHAT",
-        reply: "⚠️ 抱歉同学，当前选课系统 AI 节点访问人数过多（服务器高负载），请喝口水稍等几秒钟再试一次吧~",
-        actionData: {},
-        currentTimetable: currentTimetable
+        reply:
+          "⚠️ 抱歉同学，当前 AI 选课系统暂时繁忙，请稍后再试一次。",
+        actions: [],
+        currentTimetable
       });
+
       return;
     }
-    const responseText = result.response.text();
-    
-    // 🌟 2. 意图拦截器正式上线！
-    const aiResponse = JSON.parse(responseText);
-    const preferences = aiResponse.actionData.preferences || { avoidDays: [], avoidTimeBefore: 0 };
-    const activeSemester = settings?.activeSemester || '2526-SEM1';
 
-    switch (aiResponse.intent) {
+    // ==========================================
+    // 🌟 3. 终极多核意图引擎 (处理 actions 数组)
+    // ==========================================
+    let executionFeedback = ""; // 收集底层执行结果
+    let needTimetable = false;  // 是否需要刷新课表
+    let structuredDataPayload: any = {}; // 用来收集进度表、推荐表等额外数据
+
+    // 遍历执行 AI 分解出的所有动作
+    for (const action of aiResponse.actions || []) {
+      const intent = action.intent;
+      const data = action.actionData || {};
+      const prefs = data.preferences || { avoidDays: [], avoidTimeBefore: 0 };
+
+      switch (intent) {
         case 'REGISTER_COURSE':
-            if (aiResponse.actionData?.courseCode) {
-                const prefs = aiResponse.actionData.preferences || {};
-                const actionResult = await registerCourseAction(studentId, aiResponse.actionData.courseCode, activeSemester, prefs);
-                
-                aiResponse.reply = actionResult.success 
-                    ? `${aiResponse.reply} \n\n✅ 执行反馈：${actionResult.message}`
-                    : `${aiResponse.reply} \n\n❌ 拦截提示：${actionResult.message}`;
-
-                    if (actionResult.success && actionResult.registeredSection) {
-                        // 字典：把数字翻译成星期
-                        const dayMap = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-                        
-                        // 遍历这门课所有的上课时间 (因为一门课可能有 Lab 和 Lecture 多个时间)
-                        const timeStrings = actionResult.registeredSection.timeSlots.map((ts: any) => {
-                        // 把 800 变成 "08:00", 把 1400 变成 "14:00"
-                        const startStr = ts.startTime.toString().padStart(4, '0');
-                        const endStr = ts.endTime.toString().padStart(4, '0');
-                        return `${dayMap[ts.dayOfWeek]} ${startStr.slice(0, 2)}:${startStr.slice(2)} - ${endStr.slice(0, 2)}:${endStr.slice(2)}`;
-                    }).join('，'); // 如果有多个时间，用逗号连起来
-
-                    // 狠狠地追加到 reply 字符串的最后！
-                    aiResponse.reply += `\n📅 排课详情：Sec ${actionResult.registeredSection.sectionNumber} | 时间：${timeStrings} | 地点：${actionResult.registeredSection.venue}`;
-                }
-                
-            }else {
-                aiResponse.reply += `\n\n❌ 系统提示：请告诉我你要退选的具体课程代码（例如 BCS2143）。`;
+          if (data.courseCode) {
+            const res = await registerCourseAction(studentId, data.courseCode, activeSemester, prefs);
+            executionFeedback += `\n▶️ [选课 ${data.courseCode}]: ${res.message}`;
+            if (res.success && res.registeredSection) {
+               executionFeedback += ` (分配至 Sec ${res.registeredSection.sectionNumber})`;
             }
-            break;
+            needTimetable = true;
+          }
+          break;
         
         case 'DROP_COURSE':
-            if (aiResponse.actionData?.courseCode) {
-                const actionResult = await dropCourseAction(studentId, aiResponse.actionData.courseCode, activeSemester);
-                
-                // 把系统的物理执行结果，缝合在 AI 高情商回复的屁股后面
-                aiResponse.reply = actionResult.success 
-                    ? `${aiResponse.reply} \n\n✅ 执行反馈：${actionResult.message}`
-                    : `${aiResponse.reply} \n\n❌ 拦截提示：${actionResult.message}`;
-            } else {
-                // 防御性编程：万一 AI 没能从用户话语里提取出课程代码
-                aiResponse.reply += `\n\n❌ 系统提示：请告诉我你要退选的具体课程代码（例如 BCS2143）。`;
-            }
-        break;
+          if (data.courseCode) {
+            const res = await dropCourseAction(studentId, data.courseCode, activeSemester);
+            executionFeedback += `\n▶️ [退课 ${data.courseCode}]: ${res.message}`;
+            needTimetable = true;
+          }
+          break;
 
         case 'SWAP_COURSE':
-            if (aiResponse.actionData?.courseCode) {
-                const targetSec = aiResponse.actionData.targetSection || "";
-                const prefs = aiResponse.actionData.preferences || {};
-                
-                const swapResult = await swapCourseAction(studentId, aiResponse.actionData.courseCode, activeSemester, targetSec, prefs);
-                
-                aiResponse.reply = swapResult.success 
-                    ? `${aiResponse.reply} \n\n✅ 执行反馈：${swapResult.message}`
-                    : `${aiResponse.reply} \n\n❌ 拦截提示：${swapResult.message}`;
-            } else {
-                aiResponse.reply += `\n\n❌ 系统提示：请告诉我你要调剂的具体课程代码（例如 BCS2143）。`;
-            }
-        break;
-      
+          if (data.courseCode) {
+            const res = await swapCourseAction(studentId, data.courseCode, activeSemester, data.targetSection || "", prefs);
+            executionFeedback += `\n▶️ [换课 ${data.courseCode}]: ${res.message}`;
+            needTimetable = true;
+          }
+          break;
+
         case 'VIEW_TIMETABLE':
-            // 调用未来要写的 getTimetableAction，把课表数据塞进给前端的 JSON 里
-            break;
+          needTimetable = true;
+          break;
 
         case 'SEARCH_COURSE':
-            if (aiResponse.actionData?.courseCode) {
-                const searchResult = await searchCourseAction(aiResponse.actionData.courseCode, activeSemester);
-                // 把排版好的班级列表硬塞到 AI 聊天的屁股后面
-                aiResponse.reply += `\n\n🔍 查课结果：\n${searchResult.message}`;
-            } else {
-                aiResponse.reply += `\n\n❌ 系统提示：请提供准确的课程代码（例如 BCS2143）以便我为您查询。`;
-            }
-            break;
+          if (data.courseCode) {
+            const res = await searchCourseAction(data.courseCode, activeSemester);
+            executionFeedback += `\n\n🔍 查课结果：\n${res.message}`;
+          }
+          break;
 
         case 'RECOMMEND_PLAN':
-            const recommendResult = await recommendPlanAction(studentId, activeSemester);
-        
-            if (recommendResult.success) {
-                // 1. 让 AI 嘴巴闭上，不要再长篇大论，给一句高情商提示即可
-                aiResponse.reply += `\n\n✅ 系统已为你生成专属的【智能选课推荐卡片】，请在下方/右侧面板查阅。`;
-                
-                // 2. 🌟 把极其干净的数组结构，塞进 actionData 里面给前端！
-                aiResponse.actionData.recommendations = recommendResult.data;
-            }
-            break;
-
-        case 'CHAT':
-            break;
+          const recRes = await recommendPlanAction(studentId, activeSemester);
+          if (recRes.success) {
+            executionFeedback += `\n✅ 已生成【智能选课推荐卡片】。`;
+            structuredDataPayload.recommendations = recRes.data;
+          }
+          break;
 
         case 'CHECK_PROGRESS':
-            const progressResult = await checkStudentProgressAction(studentId, activeSemester);
-            if (progressResult.success) {
-                // 文本给个好消息
-                aiResponse.reply += `\n\n✅ 系统已为你生成最新的【毕业学分动态进度看板】，请在右侧/下方直观查阅。`;
-                // 结构化数据塞入 actionData 给前端画环形图或进度条
-                aiResponse.actionData.progressReport = progressResult.data;
-            }
-            break;
+          const progRes = await checkStudentProgressAction(studentId, activeSemester);
+          if (progRes.success) {
+            executionFeedback += `\n✅ 已生成【毕业学分动态进度看板】。`;
+            structuredDataPayload.progressReport = progRes.data;
+          }
+          break;
 
         case 'CHECK_PREREQUISITE':
-            if (aiResponse.actionData?.courseCode) {
-                const prereqResult = await checkPrerequisiteAction(aiResponse.actionData.courseCode);
-                
-                // 🌟 重点改这里：加上 && prereqResult.data
-                if (prereqResult.success && prereqResult.data) {
-                    // 拼接可读性文本
-                    const listStr = prereqResult.data.hasPrerequisites 
-                    ? prereqResult.data.prerequisites.map((p: any) => `【${p.prerequisiteName} (${p.prerequisiteCode})】`).join('、')
-                    : '该科目属于基础课，无任何前置科目门槛，可直接报考！';
-                    
-                    aiResponse.reply += `\n\n🔍 先修审查结果：修读科目【${prereqResult.data.courseName}】的前置要求为：${listStr}`;
-                    // 结构化数据捎带过去
-                    aiResponse.actionData.prerequisiteInfo = prereqResult.data;
-                } else {
-                    aiResponse.reply += `\n\n❌ 查询提示：${prereqResult.message}`;
-                }
+          if (data.courseCode) {
+            const preRes = await checkPrerequisiteAction(data.courseCode);
+            if (preRes.success && preRes.data) {
+              const listStr = preRes.data.hasPrerequisites 
+                ? preRes.data.prerequisites.map((p: any) => `【${p.prerequisiteName} (${p.prerequisiteCode})】`).join('、')
+                : '无前置科目门槛。';
+              executionFeedback += `\n🔍 【${preRes.data.courseName}】的先修要求：${listStr}`;
+              structuredDataPayload.prerequisiteInfo = preRes.data;
             } else {
-                aiResponse.reply += `\n\n❌ 系统提示：请提供你要查询的科目代码或缩写（如想打听数据结构，请输入 DS 或者是 BCI1093）。`;
+              executionFeedback += `\n❌ 查询提示：${preRes.message}`;
             }
-            break;
+          }
+          break;
 
+        case 'CHAT':
         default:
-            // 什么都不做，纯聊天，直接把 aiResponse 发给前端
-            break;
+          break;
+      }
     }
-    // 3. 把最终结果发给前端
 
+    // ==========================================
+    // 🌟 4. 组装并发送最终 JSON
+    // ==========================================
+    // 把底层反馈缝合到 AI 的贴心回复后面
+    let finalNaturalReply = aiResponse.reply;
+
+    // 🌟 终极进化：二次反刍引擎 (Second-Pass Generation)
+    if (executionFeedback) {
+      const detectLanguage = (text: string) => {
+        if (/[\u4e00-\u9fff]/.test(text)) return "Chinese";
+        if (/[\u0E00-\u0E7F]/.test(text)) return "Thai";
+        if (/[\u0600-\u06FF]/.test(text)) return "Arabic";
+        return "English";
+      };
+
+      const studentLanguage = detectLanguage(message);
+
+      const mouthPrompt = `
+        You are Laozu, a university course registration AI assistant.
+
+        Student message:
+        "${message}"
+
+        Detected student language:
+        ${studentLanguage}
+
+        The backend system has executed the following actions:
+        """
+        ${executionFeedback}
+        """
+
+        Rules:
+        1. You MUST reply ONLY in ${studentLanguage}.
+        2. Ignore the language used inside backend logs.
+        3. Do not use Chinese unless the student's message is Chinese.
+        4. Be friendly, clear, and professional.
+        5. If there are credit warnings, explain them clearly.
+        6. Output normal natural language only. Do not output JSON.
+      `;
+
+      try {
+        const chatCompletion = await groq.chat.completions.create({
+            messages: [{ role: "user", content: mouthPrompt }],
+            model: "llama-3.1-8b-instant", // 完全免费且极度聪明的开源大模型
+        });
+        finalNaturalReply = chatCompletion.choices[0]?.message?.content || finalNaturalReply;
+      } catch (pass2Error) {
+        logger.error("[AI Mouth] 二次润色失败，回退到原始缝合文本", pass2Error);
+        // 如果第二次呼叫失败，为了保命，还是用之前的缝合方案
+        finalNaturalReply = `${aiResponse.reply}\n\n⚙️ 统筹执行反馈：${executionFeedback}`;
+      }
+    }
+
+    // 🌟 统一拉取一次最新课表 (如果这批动作里有增删改查)
     let currentTimetable;
-
-    // 🌟 2. 极其优雅的包含判断法 (避免繁琐的 || 符号)
-    const timetableIntents = ["REGISTER_COURSE", "SWAP_COURSE", "DROP_COURSE", "VIEW_TIMETABLE"];
-
-    if (timetableIntents.includes(aiResponse.intent)) {
+    if (needTimetable) {
       currentTimetable = await getStudentTimetable(studentId, activeSemester);
     }
 
-    // 🌟 3. 发送给前端
+    // 🌟 终极发送给前端
     res.json({ 
-        ...aiResponse, 
+        reply: finalNaturalReply, // 现在的回复，是完全经过 AI 二次润色、百分百贴合语境的神级文本！
+        actions: aiResponse.actions,
+        ...structuredDataPayload,
         ...(currentTimetable && { currentTimetable })
     });
 
   } catch (error) {
-    console.error("AI 脑短路了:", error);
+    logger.error("AI 脑短路了:", error);
     res.status(500).json({ error: 'AI 暂时无法响应，请稍后再试。' });
   }
 };
+
+async function generateAIResponse(systemPrompt: string, message: string) {
+  const userPrompt = `
+${systemPrompt}
+
+学生输入：
+"${message}"
+
+请只输出 JSON，不要 markdown，不要解释。
+`;
+
+  // 1. Try Gemini with retry
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const currentAI = getGenAIInstance();
+
+      const model = currentAI.getGenerativeModel({
+        model: 'gemini-2.5-flash',
+        generationConfig: { responseMimeType: "application/json" }
+      });
+
+      const result = await model.generateContent({
+        contents: [
+          { role: 'user', parts: [{ text: systemPrompt }] },
+          { role: 'model', parts: [{ text: 'Understood. Waiting for user input.' }] },
+          { role: 'user', parts: [{ text: message }] }
+        ]
+      });
+
+      return JSON.parse(result.response.text());
+
+    } catch (error: any) {
+      logger.error(`[Gemini Attempt ${attempt}] failed: ${error.message}`);
+      await delay(800 * attempt);
+    }
+  }
+
+  // 2. Fallback to Groq
+  try {
+    const completion = await groq.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [
+        {
+          role: "system",
+          content: "You are an intent extraction engine. Return valid JSON only. No markdown."
+        },
+        {
+          role: "user",
+          content: userPrompt
+        }
+      ],
+      temperature: 0.2,
+    });
+
+    const text = completion.choices[0]?.message?.content || "{}";
+    return JSON.parse(text);
+
+  } catch (error: any) {
+    logger.error(`[AI Fallback] Groq also failed: ${error.message}`);
+    throw new Error("All AI providers failed");
+  }
+}

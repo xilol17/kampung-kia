@@ -84,14 +84,28 @@ export const registerCourseAction = async (userId: string, courseCode: string, s
   const occupiedSlots = currentEnrollments.flatMap(e => e.section.timeSlots);
   const existingDays = new Set(occupiedSlots.map(s => s.dayOfWeek)); // 记录学生哪几天已经有课了
 
-  // ⚠️ 注意：这里必须 include lecturer，否则没法判断避雷老师！
-  const availableSections = await prisma.section.findMany({
+  const availableSectionsRaw = await prisma.section.findMany({
     where: { courseCode: courseCode, semester: semester },
-    include: { timeSlots: true, lecturer: true }
+    include: {
+      timeSlots: true,
+      lecturer: true,
+      enrollments: {
+        where: {
+          status: { in: ['PENDING_PA', 'APPROVED'] }
+        }
+      }
+    }
   });
 
+  const availableSections = availableSectionsRaw.filter(
+    section => section.enrollments.length < section.capacity
+  );
+
   if (availableSections.length === 0) {
-    return { success: false, message: `抱歉，${courseCode} 在本学期没有开班。` };
+    return {
+      success: false,
+      message: `选课失败：${courseCode} 本学期所有 Section 都已经满人。`
+    };
   }
 
   // ==========================================
@@ -180,16 +194,28 @@ export const registerCourseAction = async (userId: string, courseCode: string, s
   // ==========================================
   try {
     await prisma.enrollment.create({
-      data: { userId: userId, sectionId: targetSection.id, semester: semester, status: 'PENDING_PA' }
+      data: { 
+        userId: userId,
+        courseCode: courseCode,
+        sectionId: targetSection.id,
+        semester: semester,
+        status: 'PENDING_PA'
+      }
     });
     
     // 动态生成系统的邀功/解释信息
     let extraMsg = '';
+    
+    // 如果有妥协扣分 (分数 < 100)
     if (targetSection.preferenceScore < 100 && targetSection.compromises.length > 0) {
-      extraMsg = `\n(⚠️ 注：为了避开你的课表冲突，系统不得不安排了 Sec ${targetSection.sectionNumber}。由于资源限制，本次排课 ${targetSection.compromises.join('、')}，敬请谅解。)`;
-    } else if (targetSection.preferenceScore >= 100 && Object.keys(rawPreferences).length > 0) {
-      extraMsg = `\n(✨ 完美！系统为你锁定的 Sec ${targetSection.sectionNumber} 不仅没冲突，还完美满足了你的所有作息和老师偏好！)`;
-    } else {
+      extraMsg = `\n(⚠️ 注：为了避开你的课表冲突，系统不得不安排了 Sec ${targetSection.sectionNumber}。本次排课 ${targetSection.compromises.join('、')}，敬请谅解。)`;
+    } 
+    // 只有当分数 > 100 (意味着遇到了指定的首选老师，获得了 +50 加分) 才极度炫耀
+    else if (targetSection.preferenceScore > 100) {
+      extraMsg = `\n(✨ 完美！系统为你锁定的 Sec ${targetSection.sectionNumber} 不仅没冲突，还成功帮你抢到了你偏好的老师！)`;
+    } 
+    // 普普通通的默认情况
+    else {
       extraMsg = `\n(✅ 已成功排入 Sec ${targetSection.sectionNumber}，无时间冲突。)`;
     }
 
@@ -331,8 +357,20 @@ export const swapCourseAction = async (userId: string, courseCode: string, semes
   // 4. 找到所有可以换的候选班级 (剔除现在的班级)
   let availableSections = await prisma.section.findMany({
     where: { courseCode: courseCode, semester: semester, id: { not: existingEnrollment.sectionId } },
-    include: { timeSlots: true, lecturer: true }
+    include: { 
+      timeSlots: true, 
+      lecturer: true ,
+      enrollments: {
+        where: {
+          status: { in: ['PENDING_PA', 'APPROVED'] }
+        }
+      }
+    }
   });
+
+  availableSections = availableSections.filter(
+    section => section.enrollments.length < section.capacity
+  );
 
   // 如果用户明确指定了要换去哪个班 (比如 02 班)
   if (targetSectionNum) {
@@ -370,7 +408,15 @@ export const swapCourseAction = async (userId: string, courseCode: string, semes
       // 动作 A：删掉老班级
       prisma.enrollment.delete({ where: { id: existingEnrollment.id } }),
       // 动作 B：加入新班级
-      prisma.enrollment.create({ data: { userId: userId, sectionId: targetSection.id, semester: semester, status: 'PENDING_PA' } })
+      prisma.enrollment.create({ 
+        data: { 
+          userId: userId,
+          courseCode: courseCode,
+          sectionId: targetSection.id,
+          semester: semester,
+          status: 'PENDING_PA'
+        } 
+      })
     ]);
 
     logger.info(`[Action] Swap Success! Student ${userId} moved from Sec ${oldSectionNumber} to Sec ${targetSection.sectionNumber}.`);
@@ -466,7 +512,7 @@ export const recommendPlanAction = async (userId: string, semester: string) => {
   });
 
   // 4. 🧠 核心算法：循环判断，分类推荐
-  const recommendations = { mustRetake: [] as any[], canTake: [] as any[] };
+  const qualifiedCourses = { mustRetake: [] as any[], canTake: [] as any[] };
 
   for (const course of availableCourses) {
     const code = course.courseCode;
@@ -480,29 +526,67 @@ export const recommendPlanAction = async (userId: string, semester: string) => {
 
     if (meetsAllReqs) {
       if (activeFailedCodes.includes(code)) {
-        recommendations.mustRetake.push(course); // 挂科急救区
+        qualifiedCourses.mustRetake.push(course); 
       } else {
-        recommendations.canTake.push(course); // 正常推进区
+        qualifiedCourses.canTake.push(course); 
       }
     }
   }
 
-  // 5. 组装极其专业的排版输出
+  // ==========================================
+  // 5. 🎒 智能背包算法：卡着 19 学分上限排兵布阵
+  // ==========================================
+  // 算出学生这学期已经占用了多少学分
+  const currentSemesterCredits = Array.from(currentCodes).reduce((sum, code) => {
+    const course = availableCoursesMap.get(code);
+    return sum + (course?.credit || 3);
+  }, 0);
+
+  let availableCredits = 19 - currentSemesterCredits; // 还剩多少学分额度？
+  const finalPlan = { mustRetake: [] as any[], canTake: [] as any[] };
+  let plannedCredits = 0;
+
+  // 第一优先级：拼命塞入“挂科重修”
+  for (const c of qualifiedCourses.mustRetake) {
+    const credit = c.credit || 3;
+    if (availableCredits >= credit) {
+      finalPlan.mustRetake.push(c);
+      availableCredits -= credit;
+      plannedCredits += credit;
+    }
+  }
+
+  // 第二优先级：用正常新课填满剩余学分 (可以按某种逻辑排序，这里默认按顺序塞)
+  for (const c of qualifiedCourses.canTake) {
+    const credit = c.credit || 3;
+    if (availableCredits >= credit) {
+      finalPlan.canTake.push(c);
+      availableCredits -= credit;
+      plannedCredits += credit;
+    }
+  }
+
+  // ==========================================
+  // 6. 组装极简的格式化数据供前端 Pikka 渲染
+  // ==========================================
   const formatCourse = (c: any) => ({
     courseCode: c.courseCode,
     courseName: c.courseName,
-    credit: c.credit // 假设你的数据库里有学分字段，没有可以删掉这行
+    credit: c.credit || 3
   });
 
   const structuredData = {
-    mustRetake: recommendations.mustRetake.map(formatCourse),
-    canTake: recommendations.canTake.map(formatCourse)
+    currentTakenCredits: currentSemesterCredits,        // 本学期已选学分
+    recommendedNewCredits: plannedCredits,              // 本次推荐新增学分
+    totalProjectedCredits: currentSemesterCredits + plannedCredits, // 采纳建议后的总学分 (一定 <= 19)
+    mustRetake: finalPlan.mustRetake.map(formatCourse), // 真正推荐你这学期补的重修课
+    canTake: finalPlan.canTake.map(formatCourse)        // 真正推荐你这学期上的新课
   };
 
   return { 
     success: true, 
-    message: "推荐数据已成功生成", 
-    data: structuredData // 🌟 核心：把纯净的数组交出去！
+    message: "完美学分推荐方案已生成", 
+    data: structuredData 
   };
 };
 
