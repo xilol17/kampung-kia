@@ -9,8 +9,8 @@ interface CourseRow {
   creditHours: number;
   category: string;
   year: number | string;
-  status?: string;     // Handles incomplete states (e.g. IN_PROGRESS, NOT_TAKEN)
-  passFail?: string;   // Handles completed status states (e.g. Y)
+  status?: string;     // Handles incomplete states (e.g. IN_PROGRESS, NOT_TAKEN, FAILED)
+  passFail?: string;   // Handles completed status states (e.g. Y, N)
   grade?: string;      // Optional student earned score letter
 }
 
@@ -41,8 +41,6 @@ export default function CourseStructurePage() {
           ?.split("=")[1];
 
         const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
-
-      
 
         const response = await fetch(`${baseUrl}/api/portal/course-structure`, {
           method: "GET",
@@ -100,9 +98,7 @@ export default function CourseStructurePage() {
             Track completed academic requirements and degree pathway modules
           </p>
         </div>
-        <div className="w-24 h-8 rounded-full bg-cyan-50 border border-cyan-100 flex items-center justify-center text-[10px] font-black text-cyan-700 dark:bg-slate-900 dark:border-slate-800 dark:text-cyan-400 font-mono shadow-sm">
-          DEGREE MAP
-        </div>
+        
       </div>
 
       {/* 2. DYNAMIC CONTENT MAIN CANVAS STACK LAYER */}
@@ -111,7 +107,7 @@ export default function CourseStructurePage() {
         {/* VIEW STATE A: Blur overlay loading tracker element */}
         {isLoading && (
           <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] dark:bg-slate-950/60 flex items-center justify-center z-10 font-mono text-xs font-black tracking-widest text-slate-400 dark:text-slate-500 uppercase animate-pulse">
-            Syncing matrix progression data...
+            Syncing progression data...
           </div>
         )}
 
@@ -138,7 +134,7 @@ export default function CourseStructurePage() {
             {/* COMPLETED MODULES MATRIX CONTAINER */}
             <div className="border rounded-2xl overflow-hidden bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800 shadow-sm">
               <div className="bg-[#2D0909] text-amber-100 dark:bg-zinc-950 dark:text-zinc-200 py-2.5 px-4 text-center text-[10px] font-black tracking-widest uppercase border-b dark:border-slate-800">
-                Vertical Credit Transfer (Completed Courses)
+                Completed Courses
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-[11px] font-medium">
@@ -158,18 +154,27 @@ export default function CourseStructurePage() {
                         <td colSpan={6} className="p-8 text-center text-slate-400 font-mono text-[10px] uppercase tracking-wider">No completed course logs synchronized.</td>
                       </tr>
                     ) : (
-                      completed.map((course) => (
-                        <tr key={course.code} className="hover:bg-slate-50/40 dark:hover:bg-slate-900/10">
-                          <td className="p-3 pl-5 font-mono font-bold text-cyan-600 dark:text-cyan-400">{course.code}</td>
-                          <td className="p-3 uppercase font-semibold">{course.courseTitle}</td>
-                          <td className="p-3 text-center font-mono text-slate-500">{course.creditHours}</td>
-                          <td className="p-3 text-slate-400 font-mono text-[10px]">{course.category}</td>
-                          <td className="p-3 text-center font-mono text-slate-400">{course.year}</td>
-                          <td className="p-3 text-center font-bold text-emerald-600 dark:text-emerald-400 font-mono">
-                            {course.passFail || "Y"} {course.grade ? `(${course.grade})` : ""}
-                          </td>
-                        </tr>
-                      ))
+                      completed.map((course) => {
+                        // CHANGED HERE: Checks if explicit backend flag marks a failed module run
+                        const isFailed = course.passFail === "N" || course.grade === "F";
+
+                        return (
+                          <tr key={course.code} className="hover:bg-slate-50/40 dark:hover:bg-slate-900/10">
+                            <td className="p-3 pl-5 font-mono font-bold text-cyan-600 dark:text-cyan-400">{course.code}</td>
+                            <td className="p-3 uppercase font-semibold">{course.courseTitle}</td>
+                            <td className="p-3 text-center font-mono text-slate-500">{course.creditHours}</td>
+                            <td className="p-3 text-slate-400 font-mono text-[10px]">{course.category}</td>
+                            <td className="p-3 text-center font-mono text-slate-400">{course.year}</td>
+                            <td className={`p-3 text-center font-mono font-bold ${
+                              isFailed 
+                                ? "text-rose-600 dark:text-rose-400" 
+                                : "text-emerald-600 dark:text-emerald-400"
+                            }`}>
+                              {course.passFail || "Y"} {course.grade ? `(${course.grade})` : ""}
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -207,9 +212,12 @@ export default function CourseStructurePage() {
                           <td className="p-3 text-slate-400 font-mono text-[10px]">{course.category}</td>
                           <td className="p-3 text-center font-mono text-slate-500">{course.year}</td>
                           <td className="p-3 text-center font-mono font-bold text-[10px]">
+                            {/* CHANGED HERE: Dynamically color status configurations including custom FAILED badge styling metrics */}
                             <span className={`px-2 py-0.5 rounded text-[9px] tracking-wide uppercase ${
                               course.status === "IN_PROGRESS" 
                                 ? "bg-amber-50 text-amber-700 dark:bg-amber-950/20 dark:text-amber-400"
+                                : course.status === "FAILED"
+                                ? "bg-rose-50 text-rose-700 dark:bg-rose-950/20 dark:text-rose-400"
                                 : "bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-600"
                             }`}>
                               {(course.status || "NOT_TAKEN").replace("_", " ")}

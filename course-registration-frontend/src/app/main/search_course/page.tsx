@@ -2,12 +2,28 @@
 
 import { useState } from "react";
 
-// Mock interface for your course query results
+// 1. FIXED: Matching your exact backend data object properties
+interface TimeSlot {
+  id: number;
+  dayOfWeek: number;
+  startTime: number;
+  endTime: number;
+  sectionId: number;
+}
+
+interface Section {
+  sectionNumber: string;
+  venue: string;
+  capacity: number;
+  lecturerName: string;
+  timeSlots: TimeSlot[];
+}
+
 interface Course {
-  id: string;
-  code: string;
-  name: string;
-  section: string;
+  courseCode: string;
+  courseName: string;
+  creditHours: number;
+  sections: Section[];
 }
 
 export default function SearchCoursePage() {
@@ -15,31 +31,60 @@ export default function SearchCoursePage() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Triggered when a user clicks the search button or presses enter
+  const getDayName = (day: number) => ["", "Mon", "Tue", "Wed", "Thu", "Fri"][day] || "Any";
+
+  const formatTime = (time: number) => {
+    const hours = Math.floor(time / 100);
+    const mins = time % 100;
+    return `${hours.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}`;
+  };
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!searchQuery.trim()) return;
+    if (!searchQuery.trim() || isLoading) return;
 
     setIsLoading(true);
     try {
-      // Connect to your backend api endpoint
-      const response = await fetch(`http://localhost:8080/api/courses/search?q=${encodeURIComponent(searchQuery)}`);
+      const token = document.cookie
+        .split("; ")
+        .find((row) => row.startsWith("token="))
+        ?.split("=")[1];
+
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+
+      // FIXED: Pointing to your correct active route matching portal.controller.ts
+      const response = await fetch(`${baseUrl}/api/portal/courses/search?q=${encodeURIComponent(searchQuery.trim())}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+        },
+      });
+
       if (response.ok) {
-        const data = await response.json();
-        setCourses(data);
-      } else {
-        console.error("Failed to fetch courses");
-      }
+        const json = await response.json();
+        
+        // ✨ CORE FIX: Extract the actual nested array from json.data instead of saving the whole object!
+        if (json.success && Array.isArray(json.data)) {
+          setCourses(json.data);
+        } else {
+          setCourses([]);
+        }
+      } 
     } catch (error) {
       console.error("Error searching courses:", error);
+      setCourses([]);
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleAddSectionToPlan = (courseCode: string, sectionNum: string) => {
+    alert(`Added ${courseCode} Section ${sectionNum} to staging registry plan buffer!`);
+  };
+
   return (
-    // Width constrained perfectly to blend right alongside your shared universal navigation bar layout
-    <div className="w-full max-w-[calc(100vw-16rem)] h-full p-6 space-y-6 select-none overflow-hidden flex flex-col justify-start">
+    <div className="w-full max-w-[calc(100vw-16rem)] h-full p-6 space-y-6 overflow-hidden flex flex-col justify-start">
       
       {/* 1. Header Title Block */}
       <div className="shrink-0">
@@ -51,8 +96,8 @@ export default function SearchCoursePage() {
         </p>
       </div>
 
-      {/* 2. Top Section Container: Search Bar & Options */}
-      <main className="w-full border rounded-2xl p-6 shadow-md transition-all duration-300 bg-white/70 border-slate-200 shadow-slate-200/40 backdrop-blur-xl dark:bg-slate-900/50 dark:border-slate-800/80 dark:shadow-2xl dark:shadow-slate-950/20">
+      {/* 2. Search Field Capsule */}
+      <main className="w-full border rounded-2xl p-6 shadow-md transition-all duration-300 bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800 dark:shadow-2xl dark:shadow-slate-950/20">
         <form onSubmit={handleSearch} className="space-y-4">
           <label 
             htmlFor="course-search" 
@@ -69,8 +114,8 @@ export default function SearchCoursePage() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="e.g., CSE101, Vector Calculus, Data Structures..."
-                className="w-full border rounded-xl py-3.5 pl-11 pr-4 text-[15px] outline-none transition-all bg-slate-50 border-slate-300 placeholder-slate-400 text-slate-900 focus:ring-1 focus:ring-cyan-500 dark:bg-slate-950/50 dark:border-slate-700/60 dark:placeholder-slate-600 dark:text-white"
+                placeholder="e.g., BCI1023, Database Systems, Problem Solving..."
+                className="w-full border rounded-xl py-3.5 pl-11 pr-4 text-[14px] font-medium outline-none transition-all bg-slate-50 border-slate-300 placeholder-slate-400 text-slate-900 focus:ring-1 focus:ring-cyan-500 dark:bg-slate-950/50 dark:border-slate-700/60 dark:placeholder-slate-600 dark:text-white"
               />
             </div>
             <button
@@ -84,51 +129,83 @@ export default function SearchCoursePage() {
         </form>
       </main>
 
-      {/* 3. Bottom Section Container: Search Results */}
-      <section className="w-full flex-1 min-h-0 border rounded-2xl p-6 transition-all duration-300 bg-white/70 border-slate-200 shadow-md shadow-slate-200/40 backdrop-blur-xl dark:bg-slate-900/50 dark:border-slate-800/80 dark:shadow-2xl dark:shadow-slate-950/20 flex flex-col">
+      {/* 3. Search Results Matrix Display Cards */}
+      <section className="w-full flex-1 min-h-0 border rounded-2xl p-6 transition-all duration-300 bg-white border-slate-200 shadow-sm flex flex-col dark:bg-slate-900 dark:border-slate-800">
         <h2 className="text-xs font-bold tracking-wide uppercase mb-4 shrink-0 text-slate-500 dark:text-slate-400">
-          Search Results
+          Search Results ({courses.length} Modules Found)
         </h2>
 
-        {/* Scrollable container grid block for search cards */}
         <div className="flex-1 overflow-y-auto pr-1">
           {courses.length === 0 ? (
-            /* Empty placeholder match inside your wireframe */
-            <div className="flex flex-col items-center justify-center min-h-[300px] text-center border border-dashed rounded-xl p-8 transition-colors border-slate-200 dark:border-slate-700/40">
+            <div className="flex flex-col items-center justify-center min-h-[300px] text-center border border-dashed rounded-xl p-8 transition-colors border-slate-200 dark:border-slate-800">
               <span className="text-2xl mb-2 text-slate-400">📥</span>
               <p className="text-sm max-w-xs text-slate-400 dark:text-slate-500">
-                No courses queried yet. Enter a valid parameters or course identifier keyword above.
+                No active courses queried yet. Enter a valid parameters keyword above to populate section slots.
               </p>
             </div>
           ) : (
-            /* Response List Grid Card matching the layout layout design */
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
               {courses.map((course) => (
                 <div 
-                  key={course.id}
-                  className="border rounded-xl p-4 flex flex-col justify-between transition-all hover:scale-[1.01] bg-slate-50/80 border-slate-200 text-slate-700 hover:bg-slate-100/50 dark:bg-slate-950/40 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-950/70"
+                  key={course.courseCode}
+                  className="border rounded-2xl p-5 flex flex-col justify-between bg-slate-50/60 border-slate-200 dark:bg-slate-950/40 dark:border-slate-800/80"
                 >
                   <div>
-                    <div className="flex justify-between items-start gap-2 mb-2">
-                      <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-500">
-                        {course.code}
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="font-mono text-xs font-black px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-600 dark:text-cyan-400">
+                        {course.courseCode}
                       </span>
-                      <span className="text-xs font-medium text-slate-400 dark:text-slate-500">
-                        Sec: {course.section}
+                      <span className="text-[11px] font-bold text-slate-400 font-mono">
+                        Credits: {course.creditHours}
                       </span>
                     </div>
-                    <h3 className="font-bold text-[15px] mb-3 leading-snug text-slate-900 dark:text-white">
-                      {course.name}
-                    </h3>
-                  </div>
 
-                  <div className="mt-4 pt-3 border-t flex justify-between items-center text-xs border-slate-200 dark:border-slate-800/50">
-                    <button className="font-semibold text-slate-400 hover:text-cyan-500 transition">
-                      View Details
-                    </button>
-                    <button className="font-bold text-cyan-500 hover:text-cyan-400 transition">
-                      + Add to Plan
-                    </button>
+                    <h3 className="font-extrabold text-[15px] text-slate-900 dark:text-white mb-4 leading-snug">
+                      {course.courseName}
+                    </h3>
+                    
+                    {/* Render active class sections arrays nested within the module */}
+                    <div className="space-y-3">
+                      {course.sections.map((sec) => (
+                        <div 
+                          key={sec.sectionNumber}
+                          className="flex flex-col sm:flex-row sm:items-center justify-between p-3 border rounded-xl bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800/60 gap-3 hover:border-slate-300 dark:hover:border-slate-700 transition-colors"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-mono font-black text-slate-400 px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 rounded">
+                                SEC {sec.sectionNumber}
+                              </span>
+                              <span className="text-xs font-bold text-slate-700 dark:text-zinc-300">
+                                {sec.lecturerName}
+                              </span>
+                            </div>
+                            
+                            {sec.timeSlots.map((ts) => (
+                              <p key={ts.id} className="text-[11px] font-medium text-slate-400 dark:text-slate-500 flex items-center gap-1">
+                                <span>🗓️ {getDayName(ts.dayOfWeek)}</span>
+                                <span>• {formatTime(ts.startTime)} - {formatTime(ts.endTime)}</span>
+                                <span className="text-cyan-600 dark:text-cyan-400 font-mono">({sec.venue})</span>
+                              </p>
+                            ))}
+                          </div>
+
+                          <div className="flex items-center justify-between sm:justify-end gap-3 border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 dark:border-slate-800">
+                            <span className="text-[10px] font-bold font-mono text-slate-400">
+                              Cap: {sec.capacity}
+                            </span>
+                            <button 
+                              type="button"
+                              onClick={() => handleAddSectionToPlan(course.courseCode, sec.sectionNumber)}
+                              className="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-[10px] tracking-wide transition shadow shadow-cyan-600/10"
+                            >
+                              + Add Section
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
                   </div>
                 </div>
               ))}
@@ -136,6 +213,7 @@ export default function SearchCoursePage() {
           )}
         </div>
       </section>
+
     </div>
   );
 }

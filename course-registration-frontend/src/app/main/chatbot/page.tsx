@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 
 interface TimeSlot {
   dayOfWeek: number; // 1 = Mon, 2 = Tue, 3 = Wed, 4 = Thu, 5 = Fri
@@ -50,6 +51,12 @@ export default function ChatbotPage() {
   
   const isExpanded = messages.length > 0;
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  // 🔒 THE DOUBLE-SEND FIX: State lock tracking thread lifetime across React mounts
+  const hasFiredRef = useRef(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -58,6 +65,34 @@ export default function ChatbotPage() {
   useEffect(() => {
     if (isExpanded) scrollToBottom();
   }, [messages, isProcessing, isExpanded]);
+
+  // =================================================================
+  // 🚀 FIXED INTERCEPTOR: Lock-Guarded Auto-Run Parameter Extractor
+  // =================================================================
+  useEffect(() => {
+    const queryFromUrl = searchParams.get("q");
+    
+    // Process parameter string ONLY if our thread lock reference value is still false
+    if (queryFromUrl && queryFromUrl.trim() && !hasFiredRef.current) {
+      const cleanText = queryFromUrl.trim();
+      
+      // 1. Immediately engage thread-lock to terminate double-trigger events from Strict Mode
+      hasFiredRef.current = true;
+      
+      // 2. Clear out legacy storage redundancies to protect state loops
+      sessionStorage.removeItem("pending_chatbot_query");
+
+      // 3. Stage the captured input parameter value inside the text element state
+      setInputQuery(cleanText);
+      
+      // 4. Instantly clean the browser navigation string, rolling back to standard query routes
+      router.replace("/main/chatbot");
+
+      // 5. Fire the atomic async network request execution pipeline directly
+      console.log("🤖 [AUTO-RUN LOCK ENGAGED]: Sending standalone query message:", cleanText);
+      executeChatRequestPipeline(cleanText);
+    }
+  }, [searchParams, router]);
 
   const getDayName = (day: number) => ["", "MON", "TUE", "WED", "THU", "FRI"][day] || "ANY";
   
@@ -74,7 +109,6 @@ export default function ChatbotPage() {
     if (isProcessing) return;
     setIsProcessing(true);
     
-
     try {
       const token = document.cookie
         .split("; ")
@@ -102,8 +136,6 @@ export default function ChatbotPage() {
             sender: "ai",
             text: `🤖 System Notice: Arrangement parameters successfully initialized for module node ${courseCode}. Check your scheduler updates.`,
           },
-
-          
         ]);
       } else {
         alert(data.message || "Failed to arrange course.");
@@ -160,12 +192,12 @@ export default function ChatbotPage() {
     }
   };
 
-  // CORE SEARCH/CHAT SEND HANDLER
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputQuery.trim() || isProcessing) return;
+  // =================================================================
+  // 🚀 ATOMIC REUSABLE MESSAGING PIPELINE NETWORK CONTROLLER
+  // =================================================================
+  const executeChatRequestPipeline = async (userText: string) => {
+    if (!userText.trim() || isProcessing) return;
 
-    const userText = inputQuery.trim();
     setInputQuery(""); 
 
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), sender: "user", text: userText }]);
@@ -194,7 +226,7 @@ export default function ChatbotPage() {
         console.log("------------------ TERMINAL DEBUG STREAM ------------------");
         console.log(JSON.stringify(data, null, 2)); 
         console.log("-----------------------------------------------------------");
-        // 🔥 DEBUG LOGGER START
+        
         console.log(
           "%c🤖 [CHATBOT API DEBUG]", 
           "background: #0891b2; color: white; font-weight: bold; padding: 4px 8px; rounded-md;", 
@@ -208,6 +240,7 @@ export default function ChatbotPage() {
             rawPayload: data
           }
         );
+
         setMessages((prev) => [
           ...prev,
           {
@@ -234,8 +267,14 @@ export default function ChatbotPage() {
     }
   };
 
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputQuery.trim()) return;
+    await executeChatRequestPipeline(inputQuery);
+  };
+
   return (
-    <div className="w-full max-w-[calc(100vw-16rem)] h-full p-6 flex flex-col justify-start font-sans select-none overflow-hidden transition-all duration-500">
+    <div className="w-full max-w-[calc(100vw-16rem)] h-full p-6 flex flex-col justify-start font-sans overflow-hidden transition-all duration-500">
       
       {/* 1. TOP HEADER SECTION */}
       <div className="shrink-0 mb-4 flex items-center justify-between">
@@ -260,7 +299,7 @@ export default function ChatbotPage() {
           {!isExpanded ? (
             <div className="w-full flex flex-col items-start px-4 transition-all duration-500">
               <h2 className="text-xl font-bold tracking-tight mb-1 text-slate-800 dark:text-white/90">
-                Welcome back, Aisyah! 👋
+                Welcome back! 👋
               </h2>
               <p className="text-xs text-slate-400 leading-relaxed mb-4">
                 How can I assist you with your academic vector pathways today?
@@ -365,7 +404,7 @@ export default function ChatbotPage() {
                                       <button 
                                         onClick={() => handleAddCourse(rec.courseCode)}
                                         disabled={isProcessing}
-                                        className="text-[9px] font-bold text-cyan-600 border border-cyan-100 hover:bg-cyan-50 dark:border-slate-800 dark:text-cyan-400 dark:hover:bg-slate-900 px-2 py-1 rounded-md transition whitespace-nowrap ml-2 disabled:opacity-50"
+                                        className="text-[9px] font-bold text-cyan-600 border border-cyan-100 hover:bg-cyan-50 dark:border-slate-800 dark:text-cyan-400 dark:hover:bg-cyan-900 px-2 py-1 rounded-md transition whitespace-nowrap ml-2 disabled:opacity-50"
                                       >
                                         {isProcessing ? "..." : "+ Add"}
                                       </button>
@@ -444,12 +483,6 @@ export default function ChatbotPage() {
         </div>
 
       </div>
-
-      {/* 3. BASE HISTORY FOOTER NOTATION */}
-      <footer className="shrink-0 mt-4 text-center text-[9px] font-black tracking-widest uppercase transition-colors text-slate-400 dark:text-slate-600">
-        {!isExpanded ? "no history" : `${messages.length} messages active in stream node`}
-      </footer>
-
     </div>
   );
 }

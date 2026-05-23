@@ -12,12 +12,14 @@ const Icon = ({ name }: { name: string }) => {
     structure: "📐",
     chatbot: "🤖",
     print: "🖨️",
-    download: "📥"
+    download: "📥",
+    info: "ℹ️",
+    close: "✕"
   };
   return <span>{icons[name] || "•"}</span>;
 };
 
-// TypeScript interfaces matching your backend schema
+// TypeScript interfaces matching backend schema
 interface BackendTimeSlot {
   dayOfWeek: number;
   startTime: number;
@@ -50,13 +52,19 @@ const COURSE_COLORS: Record<string, string> = {
   BCI: "cyan",
   UHC: "purple",
   ULE: "blue",
-  BCS: "cyan"
+  BCS: "cyan",
+  ULA: "slate",
+  ULJ: "slate",
+  ULM: "slate"
 };
 
 export default function TimetablePage() {
   const [timetableData, setTimetableData] = useState<TimetableApiResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
+  
+  // 控制弹窗表单的开启以及存储当前被点击的课程详情
+  const [selectedCourse, setSelectedCourse] = useState<any | null>(null);
 
   // Dynamic side-effect fetch operation
   useEffect(() => {
@@ -98,11 +106,26 @@ export default function TimetablePage() {
     fetchTimetable();
   }, []);
 
-  // Helper mapping transformer that unrolls multi-hour objects to slot coordinates
+  // 格式化时间的辅助函数 (1600 -> "16:00")
+  const formatTimeNum = (timeNum: number) => {
+    const hours = Math.floor(timeNum / 100).toString().padStart(2, "0");
+    const mins = (timeNum % 100).toString().padStart(2, "0");
+    return `${hours}:${mins}`;
+  };
+
+  // Unrolls course arrays to matrix components
   const getProcessedCourses = () => {
     if (!timetableData || !timetableData.data) return [];
     
-    const list: Array<{ day: string; time: string; code: string; name: string; room: string; color: string }> = [];
+    const list: Array<{ 
+      day: string; 
+      time: string; 
+      code: string; 
+      name: string; 
+      room: string; 
+      color: string;
+      raw: BackendCourse; 
+    }> = [];
     const dayMap = ["", "Mon", "Tue", "Wed", "Thu", "Fri"];
 
     const convertToSlotString = (hour: number) => {
@@ -125,7 +148,6 @@ export default function TimetablePage() {
         const startHour = Math.floor(slot.startTime / 100);
         const endHour = Math.floor(slot.endTime / 100);
 
-        // Duplicates entries dynamically into each hourly slot block boundary
         for (let hour = startHour; hour < endHour; hour++) {
           const stringCoordinateTime = convertToSlotString(hour);
           
@@ -135,7 +157,8 @@ export default function TimetablePage() {
             code: course.courseCode,
             name: course.courseName,
             room: course.venue,
-            color: assignedColor
+            color: assignedColor,
+            raw: course
           });
         }
       });
@@ -146,17 +169,20 @@ export default function TimetablePage() {
 
   const processedCourses = getProcessedCourses();
 
+  const totalCoursesCount = timetableData?.data?.length || 0;
+  const calculatedTotalCredits = totalCoursesCount * 3;
+
   return (
-    <div className="w-full max-w-[calc(100vw-16rem)] h-full p-5 font-sans select-none overflow-hidden transition-colors duration-300">
+    <div className="w-full max-w-[calc(100vw-16rem)] h-full p-3.5 font-sans overflow-hidden transition-colors duration-300">
       
       {/* MASSIVE MASTER TIME TABLE SHEET CANVAS */}
-      <main className="w-full h-full rounded-2xl border p-6 flex flex-col shadow-sm bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800 transition-colors overflow-hidden">
+      <main className="w-full h-full rounded-2xl border p-4 flex flex-col shadow-sm bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800 transition-colors overflow-hidden">
         
         {/* Calendar Management Header Line */}
-        <div className="flex justify-between items-center pb-5 border-b border-slate-100 dark:border-slate-800 mb-5 shrink-0">
+        <div className="flex justify-between items-center pb-2 border-b border-slate-100 dark:border-slate-800 mb-2.5 shrink-0">
           <div>
-            <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white">My Class Schedule</h1>
-            <p className="text-[11px] text-slate-500 mt-0.5">
+            <h1 className="text-lg font-extrabold tracking-tight text-slate-900 dark:text-white">My Class Schedule</h1>
+            <p className="text-[10px] text-slate-500 mt-0.5">
               {isLoading 
                 ? "Synchronizing registration matrices..." 
                 : errorNotice 
@@ -164,89 +190,83 @@ export default function TimetablePage() {
                 : `Semester: ${timetableData?.semester} • Live Structural Grid Map`}
             </p>
           </div>
-          
-          {/* Quick Utility controls */}
-          <div className="flex gap-2">
-            <button className="flex items-center gap-2 px-3 py-1.5 text-[11px] font-bold border rounded-xl shadow-sm transition bg-slate-50 border-slate-200 hover:bg-slate-100 dark:bg-slate-800 dark:border-slate-700 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300">
-              <Icon name="print" /> Print Matrix
-            </button>
-            <button className="flex items-center gap-2 px-3 py-1.5 text-[11px] font-bold text-white bg-cyan-600 hover:bg-cyan-500 rounded-xl shadow-sm transition">
-              <Icon name="download" /> Export iCal
-            </button>
-          </div>
         </div>
 
         {/* The Calendar Grid Container Block */}
-        <div className="flex-grow flex flex-col min-h-0 border rounded-xl overflow-hidden border-slate-100 dark:border-slate-800 relative">
+        <div className="flex-1 flex flex-col min-h-0 border rounded-xl overflow-hidden border-slate-100 dark:border-slate-800 relative mb-3">
           
-          {/* View State overlay loader */}
+          {/* View State overlays */}
           {isLoading && (
             <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] dark:bg-slate-950/60 flex items-center justify-center z-10 font-mono text-xs font-black tracking-widest text-slate-400 dark:text-slate-500 uppercase animate-pulse">
               Connecting database stream node...
             </div>
           )}
 
-          {/* View State error handling message screen */}
           {errorNotice && !isLoading && (
             <div className="absolute inset-0 bg-rose-50/40 backdrop-blur-sm dark:bg-rose-950/5 flex flex-col items-center justify-center z-10 p-6 text-center">
               <span className="text-2xl mb-2">📡</span>
-              <p className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400 max-w-sm">
-                {errorNotice}
-              </p>
-              <button 
-                onClick={() => window.location.reload()} 
-                className="mt-4 text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 bg-slate-900 text-white dark:bg-white dark:text-slate-900 rounded-lg shadow active:scale-95 transition"
-              >
+              <p className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400 max-w-sm">{errorNotice}</p>
+              <button onClick={() => window.location.reload()} className="mt-4 text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 bg-slate-900 text-white dark:bg-white dark:text-slate-900 rounded-lg shadow active:scale-95 transition">
                 Retry Matrix Sync
               </button>
             </div>
           )}
 
-          {/* Top Row: Weekday column titles headers */}
-          <div className="grid grid-cols-6 border-b shrink-0 text-center text-[10px] font-black uppercase tracking-widest bg-slate-50 border-slate-100 text-slate-500 dark:bg-slate-950/60 dark:border-slate-800 dark:text-slate-400">
-            <div className="py-3 border-r border-slate-100 dark:border-slate-800">Time Window</div>
+          {/* Top Row: Weekday headers */}
+          <div className="grid grid-cols-6 border-b shrink-0 text-center text-[9px] font-black uppercase tracking-widest bg-slate-50 border-slate-100 text-slate-500 dark:bg-slate-950/60 dark:border-slate-800 dark:text-slate-400">
+            <div className="py-2 border-r border-slate-100 dark:border-slate-800">Time Window</div>
             {DAYS.map((day) => (
-              <div key={day} className="py-3 last:border-r-0 border-r border-slate-100 dark:border-slate-800">{day}</div>
+              <div key={day} className="py-2 border-r last:border-r-0 border-slate-100 dark:border-slate-800">{day}</div>
             ))}
           </div>
 
           {/* Matrix Core Rows */}
-          <div className="flex-grow overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+          <div className="flex-grow overflow-hidden divide-y divide-slate-100 dark:divide-slate-800">
             {TIME_SLOTS.map((timeSlot) => (
-              <div key={timeSlot} className="grid grid-cols-6 items-stretch min-h-[85px]">
+              /* 🌟 修改点：为了放大课表矩阵，将每行最小高度从 min-h-[44px] 扩大到 min-h-[62px] */
+              <div key={timeSlot} className="grid grid-cols-6 items-stretch min-h-[59px]">
                 
-                {/* Time coordinate indicator box */}
-                <div className="text-[10px] font-mono font-bold flex flex-col justify-center items-center border-r border-slate-100 dark:border-slate-800 p-2 text-center bg-slate-50/40 text-slate-400 dark:bg-slate-950/20 dark:text-slate-500">
+                {/* Time indicator */}
+                <div className="text-[11px] font-mono font-bold flex flex-col justify-center items-center border-r border-slate-100 dark:border-slate-800 p-0.5 text-center bg-slate-50/40 text-slate-400 dark:bg-slate-950/20 dark:text-slate-500">
                   {timeSlot}
                 </div>
 
-                {/* Day cell generator loop */}
+                {/* Day cells */}
                 {DAYS.map((day) => {
-                  const course = processedCourses.find(c => c.day === day && c.time === timeSlot);
+                  const currentCourseNode = processedCourses.find(c => c.day === day && c.time === timeSlot);
 
                   return (
-                    <div key={day} className="border-r last:border-r-0 border-slate-100 dark:border-slate-800 p-1 flex items-stretch min-w-0">
-                      {course ? (
-                        <div className={`w-full rounded-xl p-2.5 border flex flex-col justify-between transition-all hover:scale-[1.01] ${
-                          course.color === 'cyan'
-                            ? 'bg-cyan-50 border-cyan-200 text-cyan-800 dark:bg-cyan-950/20 dark:border-cyan-800/80 dark:text-cyan-300'
-                            : course.color === 'blue'
-                            ? 'bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-950/20 dark:border-blue-800/80 dark:text-blue-300'
-                            : course.color === 'purple'
-                            ? 'bg-purple-50 border-purple-200 text-purple-800 dark:bg-purple-950/20 dark:border-purple-800/80 dark:text-purple-300'
-                            : 'bg-slate-100 border-slate-200 text-slate-700 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300'
-                        }`}>
+                    <div key={day} className="border-r last:border-r-0 border-slate-100 dark:border-slate-800 p-0.5 flex items-stretch min-w-0">
+                      {currentCourseNode ? (
+                        <div 
+                          onClick={() => setSelectedCourse({
+                            ...currentCourseNode.raw,
+                            activeDay: day,
+                            activeSlot: timeSlot
+                          })}
+                          /* 🌟 修改点：随矩阵一同微调大卡片的内边距到 p-1.5 使得版面平衡 */
+                          className={`w-full rounded-md p-1.5 border flex flex-col justify-center cursor-pointer transition-all hover:scale-[1.01] hover:brightness-95 active:scale-95 ${
+                            currentCourseNode.color === 'cyan'
+                              ? 'bg-cyan-50 border-cyan-200 text-cyan-800 dark:bg-cyan-950/20 dark:border-cyan-800/80 dark:text-cyan-300'
+                              : currentCourseNode.color === 'blue'
+                              ? 'bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-950/20 dark:border-blue-800/80 dark:text-blue-300'
+                              : currentCourseNode.color === 'purple'
+                              ? 'bg-purple-50 border-purple-200 text-purple-800 dark:bg-purple-950/20 dark:border-purple-800/80 dark:text-purple-300'
+                              : currentCourseNode.color === 'slate'
+                              ? 'bg-slate-50 border-slate-200 text-slate-700 dark:bg-slate-800/40 dark:border-slate-700/80 dark:text-slate-300'
+                              : 'bg-slate-100 border-slate-200 text-slate-700 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300'
+                          }`}
+                        >
                           <div>
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-[9px] font-mono font-extrabold tracking-wide uppercase opacity-75">{course.code}</span>
-                              <span className="text-[8px] font-semibold opacity-60 px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/5 truncate">{course.room}</span>
+                            <div className="flex items-center justify-between gap-0.5">
+                              <span className="text-[9px] font-mono font-extrabold tracking-tight opacity-90 leading-none">{currentCourseNode.code}</span>
+                              <span className="text-[9px] font-semibold opacity-70 px-1 py-0.2 rounded bg-black/5 dark:bg-white/5 truncate max-w-[45px] leading-none">{currentCourseNode.room}</span>
                             </div>
-                            <h3 className="text-[10px] font-bold leading-tight mt-0.5 line-clamp-2 text-slate-800 dark:text-zinc-200">{course.name}</h3>
+                            <h3 className="text-[10px] font-bold leading-tight mt-0.5 truncate text-slate-800 dark:text-zinc-200">{currentCourseNode.name}</h3>
                           </div>
-                          <p className="text-[8px] opacity-50 font-medium mt-0.5">Duration Segment Block</p>
                         </div>
                       ) : (
-                        <div className="w-full rounded-lg border border-dashed border-transparent transition hover:bg-slate-100/30 dark:hover:bg-slate-800/20"></div>
+                        <div className="w-full rounded-md border border-dashed border-transparent transition hover:bg-slate-100/30 dark:hover:bg-slate-800/20"></div>
                       )}
                     </div>
                   );
@@ -257,7 +277,139 @@ export default function TimetablePage() {
           </div>
 
         </div>
+
+        {/* Registered Subjects 2-Column Split Matrix with Interactive Hover Effects */}
+        {/* 🌟 修改点：大边框内边距微调，腾出极其完美的空间比例 */}
+        <div className="shrink-0 mb-3 px-3 py-2 border rounded-xl bg-slate-50/30 border-slate-100 dark:bg-slate-950/20 dark:border-slate-800">
+          <div className="grid grid-cols-2 gap-x-8 gap-y-0.5">
+            {timetableData?.data && timetableData.data.length > 0 ? (
+              timetableData.data.map((subj, index) => (
+                <div 
+                  key={index}
+                  onClick={() => setSelectedCourse({ ...subj })}
+                  /* 🌟 修改点：重构了底部的每一行文本容器类。
+                     增加了 px-2 py-1（提供更大的鼠标悬停触发面积）、rounded-md、
+                     以及 hover:bg-slate-100/60 与 hover:translate-x-1 的平滑变色右移交互特效 */
+                  className="flex items-center text-[10px] font-bold tracking-wide cursor-pointer transition-all duration-200 text-slate-800 dark:text-zinc-200 hover:text-cyan-600 dark:hover:text-cyan-400 py-1 px-2 rounded-md hover:bg-slate-100/60 dark:hover:bg-slate-800/40 hover:translate-x-1"
+                >
+                  <span className="font-mono text-slate-950 dark:text-white shrink-0 min-w-[65px]">
+                    {subj.courseCode}
+                  </span>
+                  <span className="mx-1.5 text-slate-300 dark:text-slate-700 font-normal">-</span>
+                  <span className="truncate font-sans uppercase text-slate-700 dark:text-zinc-300">
+                    {subj.courseName}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className="col-span-2 text-center py-1 text-xs font-mono text-slate-400">
+                No active course modules loaded in active plan registry buffer.
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Bottom Credits Counter Metrics Panel */}
+        <div className="shrink-0 w-full p-2.5 rounded-xl border flex items-center justify-between bg-slate-50 border-slate-100 dark:bg-slate-950/40 dark:border-slate-800">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400">
+              <span>Registered Modules:</span>
+              <span className="font-mono font-bold text-slate-950 dark:text-white px-2 py-0.5 bg-slate-200/60 dark:bg-slate-800 rounded-md">{totalCoursesCount} Subjects</span>
+            </div>
+            <div className="w-px h-4 bg-slate-200 dark:bg-slate-800" />
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400">
+              <span>Credit Load Limit:</span>
+              <span className="text-slate-600 font-normal">19 Credit Hours</span>
+            </div>
+          </div>
+          
+          <div className="text-right flex items-center gap-2">
+            <span className="text-[12px] font-bold uppercase tracking-wider text-slate-600">Current Credit Hours :</span>
+            <span className="text-xs font-black font-mono text-cyan-600 dark:text-cyan-400">{calculatedTotalCredits} Total Credits Registered</span>
+          </div>
+        </div>
+
       </main>
+
+      {/* Details Form Modal Pop-up Layout */}
+      {selectedCourse && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-md rounded-2xl border shadow-2xl overflow-hidden bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800 transform transition-all scale-100 p-5 space-y-4">
+            
+            {/* Form Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse" />
+                <h2 className="text-xs font-black tracking-widest uppercase text-slate-400 font-mono">Module Parameters</h2>
+              </div>
+              <button 
+                onClick={() => setSelectedCourse(null)}
+                className="w-6 h-6 rounded-full border border-slate-100 hover:bg-slate-50 text-slate-400 flex items-center justify-center transition active:scale-90 dark:border-slate-800 dark:hover:bg-slate-800"
+              >
+                <Icon name="close" />
+              </button>
+            </div>
+
+            {/* Form Core Display Grid Fields */}
+            <div className="space-y-3">
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-wider text-slate-400 block font-mono">Course Code & Section</label>
+                <p className="text-sm font-extrabold text-cyan-600 dark:text-cyan-400 font-mono mt-0.5">
+                  {selectedCourse.courseCode} <span className="text-slate-400 font-normal text-xs ml-1">(Section {selectedCourse.sectionNumber || "01"})</span>
+                </p>
+              </div>
+
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-wider text-slate-400 block font-mono">Subject Nomenclature</label>
+                <p className="text-xs font-bold text-slate-800 dark:text-zinc-200 mt-0.5 leading-relaxed">{selectedCourse.courseName}</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[9px] font-black uppercase tracking-wider text-slate-400 block font-mono">Assigned Credit Hours</label>
+                  <p className="text-xs font-bold text-slate-800 dark:text-zinc-200 mt-0.5">3.00 Credits</p>
+                </div>
+                <div>
+                  <label className="text-[9px] font-black uppercase tracking-wider text-slate-400 block font-mono">Staging Venue Node</label>
+                  <p className="text-xs font-bold text-slate-800 dark:text-zinc-200 mt-0.5 font-mono">📍 {selectedCourse.venue}</p>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl border bg-slate-50/50 border-slate-100 dark:bg-slate-950/40 dark:border-slate-800">
+                <label className="text-[9px] font-black uppercase tracking-wider text-slate-400 block font-mono">Scheduled Windows</label>
+                <div className="mt-1 space-y-1">
+                  {selectedCourse.timeSlots ? (
+                    selectedCourse.timeSlots.map((slot: BackendTimeSlot, idx: number) => {
+                      const daysList = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+                      return (
+                        <div key={idx} className="text-[11px] font-medium text-slate-600 dark:text-slate-400 flex items-center justify-between">
+                          <span>🗓️ {daysList[slot.dayOfWeek]}</span>
+                          <span className="font-mono font-bold text-slate-900 dark:text-white">
+                            {formatTimeNum(slot.startTime)} - {formatTimeNum(slot.endTime)}
+                          </span>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-[11px] font-medium text-slate-400">Click a schedule slot card block to review timing windows.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Form Action Footer */}
+            <div className="pt-2 flex justify-end">
+              <button 
+                onClick={() => setSelectedCourse(null)}
+                className="px-4 py-2 text-[11px] font-bold text-white bg-slate-950 hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-300 rounded-xl shadow transition active:scale-95"
+              >
+                Acknowledge Parameters
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
 
     </div>
   );

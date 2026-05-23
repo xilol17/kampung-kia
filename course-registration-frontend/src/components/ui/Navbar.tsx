@@ -10,6 +10,7 @@ const Icon = ({ name }: { name: string }) => {
     calendar: "📅",
     search: "🔍",
     structure: "📐",
+    register: "📋", // 🌟 ADDED: Clipboard icon for manual registration
     chatbot: "🤖",
   };
   return <span>{icons[name] || "•"}</span>;
@@ -17,30 +18,31 @@ const Icon = ({ name }: { name: string }) => {
 
 interface NavbarProps {
   isDarkMode: boolean;
-  userName?: string;      // ADDED: Dynamic name property
-  studentId?: string;     // ADDED: Dynamic ID property
+  userName?: string;      
+  studentId?: string;     
   onLogout?: () => void;
   onToggleTheme: () => void; 
 }
 
 export default function Navbar({ 
   isDarkMode, 
-  userName = "Guest User", // Fallback text if user data isn't loaded yet
+  userName = "Guest User", 
   studentId = "ID: ------", 
   onLogout, 
   onToggleTheme 
 }: NavbarProps) {
   const pathname = usePathname();
 
+  // 🌟 UPDATED: Added "Manual Register" item directly above Chatbot
   const navItems = [
     { name: "Dashboard", id: "dashboard", icon: "dashboard", href: "/main/dashboard" },
     { name: "My Timetable", id: "timetable", icon: "calendar", href: "/main/timetable" },
     { name: "Course Search", id: "search", icon: "search", href: "/main/search_course" },
     { name: "Course Structure", id: "structure", icon: "structure", href: "/main/course_structure" }, 
+    { name: "Manual Register", id: "register", icon: "register", href: "/main/manual_register" },
     { name: "Chatbot", id: "chatbot", icon: "chatbot", href: "/main/chatbot" },
   ];
 
-  // Helper function to extract user initials for the avatar circle (e.g., "Aisyah Lim" -> "AL")
   const getInitials = (name: string) => {
     return name
       .split(" ")
@@ -51,7 +53,7 @@ export default function Navbar({
   };
 
   return (
-    <aside className={`w-64 h-screen border-r p-5 flex flex-col justify-between shadow-sm transition-colors select-none shrink-0 ${
+    <aside className={`w-64 h-screen border-r p-5 flex flex-col justify-between shadow-sm transition-colors shrink-0 ${
       isDarkMode ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200/80"
     }`}>
       
@@ -61,9 +63,12 @@ export default function Navbar({
         {/* 1. Header branding row */}
         <div className="flex items-center justify-between border-b pb-4 border-slate-100 dark:border-slate-800">
           <div className="flex items-center space-x-2.5">
-            <div className="w-8 h-8 rounded-xl bg-cyan-600 flex items-center justify-center text-white text-xs font-black shadow-sm">
-              R
-            </div>
+            <img 
+              src={isDarkMode ? "/dark logo.png" : "/white logo.png"} 
+              alt="AI Course Assistant Logo" 
+              className="w-8 h-8 object-contain rounded-xl select-none"
+              draggable={false}
+            />
             <span className={`text-xs font-extrabold tracking-tight uppercase leading-tight ${isDarkMode ? "text-white" : "text-slate-950"}`}>
               AI COURSE<br />ASSISTANT
             </span>
@@ -112,22 +117,9 @@ export default function Navbar({
           })}
         </nav>
 
-        {/* 3. Micro Contextual Helper Card */}
-        <div className={`mt-auto border rounded-xl p-4 text-[11px] ${
-          isDarkMode ? "bg-slate-950/40 border-slate-800 text-zinc-300" : "bg-slate-50 border-slate-150 text-slate-700"
-        }`}>
-          <p className="font-bold">Need assistance?</p>
-          <p className="text-slate-500 mt-0.5 mb-2.5 leading-relaxed">
-            Our prediction core is tracking live module capacities.
-          </p>
-          <button className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-1.5 rounded-lg text-[10px] transition">
-            Launch Matrix
-          </button>
-        </div>
-
       </div>
 
-      {/* CHANGED HERE: BOTTOM PROFILE SEGMENT NOW RENDERS DYNAMIC VALUE VARIABLES */}
+      {/* BOTTOM PROFILE SEGMENT */}
       <div className="border-t pt-4 border-slate-100 dark:border-slate-800 flex items-center gap-2.5">
         <div className="w-8 h-8 rounded-full bg-slate-400 flex items-center justify-center text-[10px] text-white font-bold shrink-0 uppercase">
           {getInitials(userName)}
@@ -143,12 +135,14 @@ export default function Navbar({
         
         <button 
           onClick={onLogout}
-          className={`text-xs p-1.5 rounded-lg transition active:scale-95 ${
-            isDarkMode ? "text-slate-500 hover:text-rose-400" : "text-slate-400 hover:text-rose-600"
+          className={`flex items-center justify-center rounded-xl font-bold tracking-wide transition-all duration-200 active:scale-95 shadow-sm border ${
+            isDarkMode 
+              ? "w-10 h-10 bg-slate-950/40 border-slate-800 text-slate-400 hover:text-rose-400 hover:border-rose-950/50 hover:bg-rose-950/20" 
+              : "w-10 h-10 bg-slate-50 border-slate-200 text-slate-500 hover:text-rose-600 hover:border-rose-100 hover:bg-rose-50"
           }`}
           title="Sign Out Session"
         >
-          🚪
+          <span className="text-base select-none">🚪</span>
         </button>
       </div>
 
