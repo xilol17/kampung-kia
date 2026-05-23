@@ -86,7 +86,7 @@ export default function CourseStructurePage() {
   const totalGraduationCredits = completedCredits + incompleteCredits;
 
   return (
-    <div className="w-full max-w-[calc(100vw-16rem)] h-full p-6 space-y-6 select-none flex flex-col justify-start overflow-hidden relative">
+    <div className="w-full max-w-[calc(100vw-16rem)] h-full p-6 space-y-6 flex flex-col justify-start overflow-hidden relative">
       
       {/* 1. TOP HEADER SECTION */}
       <div className="shrink-0 flex items-center justify-between">
