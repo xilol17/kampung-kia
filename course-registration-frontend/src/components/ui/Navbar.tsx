@@ -17,20 +17,38 @@ const Icon = ({ name }: { name: string }) => {
 
 interface NavbarProps {
   isDarkMode: boolean;
+  userName?: string;      // ADDED: Dynamic name property
+  studentId?: string;     // ADDED: Dynamic ID property
   onLogout?: () => void;
   onToggleTheme: () => void; 
 }
 
-export default function Navbar({ isDarkMode, onLogout, onToggleTheme }: NavbarProps) {
+export default function Navbar({ 
+  isDarkMode, 
+  userName = "Guest User", // Fallback text if user data isn't loaded yet
+  studentId = "ID: ------", 
+  onLogout, 
+  onToggleTheme 
+}: NavbarProps) {
   const pathname = usePathname();
 
   const navItems = [
-    { name: "Dashboard", id: "dashboard", icon: "dashboard", href: "/dashboard" },
-    { name: "My Timetable", id: "timetable", icon: "calendar", href: "/timetable" },
-    { name: "Course Search", id: "search", icon: "search", href: "/search_course" },
-    { name: "Course Structure", id: "structure", icon: "structure", href: "/course_structure" }, 
-    { name: "Chatbot", id: "chatbot", icon: "chatbot", href: "/chatbot" },
+    { name: "Dashboard", id: "dashboard", icon: "dashboard", href: "/main/dashboard" },
+    { name: "My Timetable", id: "timetable", icon: "calendar", href: "/main/timetable" },
+    { name: "Course Search", id: "search", icon: "search", href: "/main/search_course" },
+    { name: "Course Structure", id: "structure", icon: "structure", href: "/main/course_structure" }, 
+    { name: "Chatbot", id: "chatbot", icon: "chatbot", href: "/main/chatbot" },
   ];
+
+  // Helper function to extract user initials for the avatar circle (e.g., "Aisyah Lim" -> "AL")
+  const getInitials = (name: string) => {
+    return name
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .substring(0, 2)
+      .toUpperCase();
+  };
 
   return (
     <aside className={`w-64 h-screen border-r p-5 flex flex-col justify-between shadow-sm transition-colors select-none shrink-0 ${
@@ -51,7 +69,6 @@ export default function Navbar({ isDarkMode, onLogout, onToggleTheme }: NavbarPr
             </span>
           </div>
           
-          {/* WIRED UP: onClick now executes the state change function from your parent layout */}
           <button 
             onClick={onToggleTheme}
             type="button"
@@ -110,14 +127,18 @@ export default function Navbar({ isDarkMode, onLogout, onToggleTheme }: NavbarPr
 
       </div>
 
-      {/* BOTTOM PROFILE SEGMENT */}
+      {/* CHANGED HERE: BOTTOM PROFILE SEGMENT NOW RENDERS DYNAMIC VALUE VARIABLES */}
       <div className="border-t pt-4 border-slate-100 dark:border-slate-800 flex items-center gap-2.5">
-        <div className="w-8 h-8 rounded-full bg-slate-400 flex items-center justify-center text-[10px] text-white font-bold shrink-0">
-          AL
+        <div className="w-8 h-8 rounded-full bg-slate-400 flex items-center justify-center text-[10px] text-white font-bold shrink-0 uppercase">
+          {getInitials(userName)}
         </div>
         <div className="min-w-0 flex-1">
-          <p className={`text-[11px] font-bold truncate ${isDarkMode ? "text-white" : "text-slate-900"}`}>Aisyah Lim</p>
-          <p className="text-[9px] text-slate-500 font-mono truncate">ID: 220034</p>
+          <p className={`text-[11px] font-bold truncate ${isDarkMode ? "text-white" : "text-slate-900"}`}>
+            {userName}
+          </p>
+          <p className="text-[9px] text-slate-500 font-mono truncate">
+            ID: {studentId}
+          </p>
         </div>
         
         <button 

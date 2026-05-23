@@ -102,6 +102,8 @@ export default function ChatbotPage() {
             sender: "ai",
             text: `🤖 System Notice: Arrangement parameters successfully initialized for module node ${courseCode}. Check your scheduler updates.`,
           },
+
+          
         ]);
       } else {
         alert(data.message || "Failed to arrange course.");
@@ -189,6 +191,23 @@ export default function ChatbotPage() {
       const data: ApiResponse = await response.json();
 
       if (response.ok) {
+        console.log("------------------ TERMINAL DEBUG STREAM ------------------");
+        console.log(JSON.stringify(data, null, 2)); 
+        console.log("-----------------------------------------------------------");
+        // 🔥 DEBUG LOGGER START
+        console.log(
+          "%c🤖 [CHATBOT API DEBUG]", 
+          "background: #0891b2; color: white; font-weight: bold; padding: 4px 8px; rounded-md;", 
+          {
+            intent: data.intent,
+            reply: data.reply,
+            hasTimetable: !!data.currentTimetable,
+            timetableCount: data.currentTimetable?.length || 0,
+            mustRetakeCount: data.recommendations?.mustRetake?.length || 0,
+            canTakeCount: data.recommendations?.canTake?.length || 0,
+            rawPayload: data
+          }
+        );
         setMessages((prev) => [
           ...prev,
           {
