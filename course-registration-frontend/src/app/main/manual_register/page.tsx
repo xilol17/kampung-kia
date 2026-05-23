@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import toast, { Toaster } from "react-hot-toast"; // 🌟 引入 Toast 神器
+import toast, { Toaster } from "react-hot-toast";
 
 // 完美对齐后端 Prisma 模型的真实数据结构
 interface TimeSlot {
@@ -32,6 +32,7 @@ interface TimetableItem {
   venue: string;
   status: string;
   timeSlots: TimeSlot[];
+  creditHours?: number; // 🌟 兼容详情页展示学分
 }
 
 export default function ManualRegisterPage() {
@@ -40,6 +41,9 @@ export default function ManualRegisterPage() {
   const [timetable, setTimetable] = useState<TimetableItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
+  
+  // 🌟 新增状态：控制弹窗表单的开启以及存储当前点击待退选的课程详情
+  const [selectedCourse, setSelectedCourse] = useState<TimetableItem | null>(null);
 
   const TIME_BLOCKS = [
     { label: "08:00 - 10:00", start: 800, end: 1000 },
@@ -104,7 +108,6 @@ export default function ManualRegisterPage() {
     if (!searchQuery.trim()) return;
 
     setIsLoading(true);
-    // 🌟 查课 Loading 提示
     const searchToastId = toast.loading("Scanning institution network...", {
       style: { background: '#0f172a', color: '#38bdf8', border: '1px solid #0ea5e9' }
     });
@@ -139,7 +142,6 @@ export default function ManualRegisterPage() {
 
   const handleEnroll = async (courseCode: string, sectionNumber: string) => {
     setIsRegistering(true);
-    // 🌟 选课 Loading 提示
     const enrollToastId = toast.loading(`Attempting to override Sec ${sectionNumber}...`, {
       style: { background: '#0f172a', color: '#a78bfa', border: '1px solid #8b5cf6' }
     });
@@ -164,7 +166,6 @@ export default function ManualRegisterPage() {
       const data = await response.json();
       
       if (data.success) {
-        // 🌟 成功：赛博青色弹窗
         toast.success(data.message, { 
           id: enrollToastId,
           duration: 4000,
@@ -173,7 +174,6 @@ export default function ManualRegisterPage() {
         }); 
         fetchTimetable(); 
       } else {
-        // 🌟 失败/冲突：暗黑红色弹窗
         toast.error(data.message, { 
           id: enrollToastId,
           duration: 5000,
@@ -191,10 +191,52 @@ export default function ManualRegisterPage() {
     }
   };
 
+  // 🌟 新增方法：退选课程执行逻辑 (Drop Course Function)
+  const handleDropCourse = async (courseCode: string, sectionNumber: string) => {
+    setSelectedCourse(null); // 先关闭弹窗
+    const dropToastId = toast.loading(`Requesting pipeline termination for ${courseCode}...`, {
+      style: { background: '#1e1b4b', color: '#f87171', border: '1px solid #ef4444' }
+    });
+
+    try {
+      const token = document.cookie
+          .split("; ")
+          .find((row) => row.startsWith("token="))
+          ?.split("=")[1];
+
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+
+      // 假设退选接口符合标准 RESTful API 或你的通用解绑路由，向后端发送注销请求
+      const response = await fetch(`${baseUrl}/api/portal/course/drop`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ courseCode, sectionNumber })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        toast.success(`Successfully dropped ${courseCode}. Credits recalculated.`, {
+          id: dropToastId,
+          style: { background: '#0f172a', color: '#f43f5e', border: '1px solid #e11d48', fontWeight: 'bold' },
+          icon: '🗑️'
+        });
+        fetchTimetable(); // 刷新大课表结构
+      } else {
+        toast.error(data.message || "Failed to drop module parameter restrictions.", { id: dropToastId });
+      }
+    } catch (error) {
+      toast.error("Network system fault. Failed to synchronize core node drop.", { id: dropToastId });
+    }
+  };
+
   return (
     <div className="w-full max-w-[calc(100vw-16rem)] h-full p-6 space-y-6 select-none overflow-y-auto pr-2 flex flex-col justify-start relative">
       
-      {/* 🌟 挂载全局 Toast 引擎，设置默认暗黑位置 */}
+      {/* 挂载全局 Toast 引擎 */}
       <Toaster position="bottom-right" reverseOrder={false} />
 
       {/* 1. 头部标题 Block */}
@@ -236,7 +278,7 @@ export default function ManualRegisterPage() {
         </form>
       </main>
 
-      {/* 3. 中间区域：查询出来的 Section 列表 */}
+      {/* 3. 查询出来的 Section 列表 */}
       <section className="w-full border rounded-2xl p-6 transition-all duration-300 bg-white/70 border-slate-200 shadow-md shadow-slate-200/40 backdrop-blur-xl dark:bg-slate-900/50 dark:border-slate-800/80 dark:shadow-2xl dark:shadow-slate-950/20 flex flex-col">
         <h2 className="text-xs font-bold tracking-wide uppercase mb-4 text-slate-500 dark:text-cyan-600/70">
           Queried Module Matrix
@@ -269,7 +311,7 @@ export default function ManualRegisterPage() {
 
                 <div className="space-y-2">
                   {course.sections.map(sec => (
-                    <div key={sec.sectionNumber} className="flex flex-row justify-between items-center p-2.5 rounded-lg bg-white border border-slate-200 dark:bg-slate-900/60 dark:border-slate-800/80 transition hover:border-cyan-500/30">
+                    <div key={sec.sectionNumber} className="flex flex-row justify-between items-center p-2.5 rounded-lg bg-white border border-slate-200 dark:bg-white/5 dark:border-slate-800/80 transition hover:border-cyan-500/30">
                       <div className="flex-1 grid grid-cols-3 gap-2 items-center">
                         <div>
                           <p className="text-xs font-bold text-slate-900 dark:text-slate-200">Sec {sec.sectionNumber}</p>
@@ -333,7 +375,11 @@ export default function ManualRegisterPage() {
                     return (
                       <td key={day.value} className="p-1 border-r border-slate-200 dark:border-slate-800/40 align-middle w-1/5">
                         {match ? (
-                          <div className="w-full h-full p-2 rounded-lg flex flex-col justify-center items-center text-center transition bg-cyan-500/10 border border-cyan-500/30 shadow-sm shadow-cyan-500/5 animate-fade-in">
+                          /* 🌟 修改点：绑定点击事件，将选中的课表项放入 selectedCourse 触发弹窗渲染 */
+                          <div 
+                            onClick={() => setSelectedCourse({ ...match })}
+                            className="w-full h-full p-2 rounded-lg flex flex-col justify-center items-center text-center transition bg-cyan-500/10 border border-cyan-500/30 shadow-sm shadow-cyan-500/5 animate-fade-in cursor-pointer hover:bg-cyan-500/20 active:scale-[0.99]"
+                          >
                             <p className="font-mono text-xs font-black text-cyan-500 tracking-wide">{match.courseCode}</p>
                             <p className="text-[11px] font-bold text-slate-900 dark:text-slate-100 mt-0.5 max-w-full truncate px-1">{match.courseName}</p>
                             <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">Sec {match.sectionNumber} | 📍{match.venue}</p>
@@ -352,6 +398,86 @@ export default function ManualRegisterPage() {
           </table>
         </div>
       </section>
+
+      {/* ================================================================= */}
+      {/* 🌟 新增的点击弹窗表单 (Course Details & Drop Handler Form Modal Overlay) */}
+      {/* ================================================================= */}
+      {selectedCourse && (
+        <div 
+          onClick={() => setSelectedCourse(null)} // 点击卡片外部空白暗黑区域自动关闭
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()} // 阻止冒泡，点击窗口内部不关闭
+            className="w-full max-w-md rounded-2xl border shadow-2xl overflow-hidden bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800 transform transition-all scale-100 p-5 space-y-4"
+          >
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-cyan-500 animate-pulse" />
+                <h2 className="text-xs font-black tracking-widest uppercase text-slate-400 font-mono">Module Configuration Overview</h2>
+              </div>
+              <button 
+  onClick={() => setSelectedCourse(null)}
+  className="w-6 h-6 rounded-full border border-slate-100 hover:bg-slate-50 text-slate-400 flex items-center justify-center transition active:scale-95 dark:border-slate-800 dark:hover:bg-slate-800"
+>
+  ✕
+</button>
+            </div>
+
+            {/* Modal Content Grid */}
+            <div className="space-y-3">
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-wider text-slate-400 block font-mono">Course Code & Active Section</label>
+                <p className="text-sm font-extrabold text-cyan-600 dark:text-cyan-400 font-mono mt-0.5">
+                  {selectedCourse.courseCode} <span className="text-slate-400 font-normal text-xs ml-1">(Section {selectedCourse.sectionNumber})</span>
+                </p>
+              </div>
+
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-wider text-slate-400 block font-mono">Subject Nomenclature Title</label>
+                <p className="text-xs font-bold text-slate-800 dark:text-zinc-200 mt-0.5 leading-relaxed">{selectedCourse.courseName}</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[9px] font-black uppercase tracking-wider text-slate-400 block font-mono">Assigned Load Unit</label>
+                  <p className="text-xs font-bold text-slate-800 dark:text-zinc-200 mt-0.5">
+                    {selectedCourse.creditHours || 3}.00 Credit Hours
+                  </p>
+                </div>
+                <div>
+                  <label className="text-[9px] font-black uppercase tracking-wider text-slate-400 block font-mono">Staging Classroom Node</label>
+                  <p className="text-xs font-bold text-slate-800 dark:text-zinc-200 mt-0.5 font-mono">📍 {selectedCourse.venue}</p>
+                </div>
+              </div>
+
+              {/* Exact timing constraints */}
+              <div className="p-3 rounded-xl border bg-slate-50/50 border-slate-100 dark:bg-slate-950/40 dark:border-slate-800">
+                <label className="text-[9px] font-black uppercase tracking-wider text-slate-400 block font-mono">Scheduled Vector Windows</label>
+                <div className="mt-1 font-mono text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                  🗓️ {formatTimeSlots(selectedCourse.timeSlots)}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Bottom Buttons Matrix */}
+            <div className="pt-2 flex gap-3">
+              
+              
+              <button 
+                onClick={() => handleDropCourse(selectedCourse.courseCode, selectedCourse.sectionNumber)}
+                className="px-4 py-2 text-[11px] font-bold text-white bg-rose-600 hover:bg-rose-500 rounded-xl shadow-md transition active:scale-95"
+              >
+                Drop Course Module
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

@@ -32,7 +32,7 @@ interface DashboardSystemNotice {
   message: string;
 }
 
-// 🌟 RECOMMENDED MODULE INTERFACE PATTERN FOR THE SIDEBAR ITEMS
+// RECOMMENDED MODULE INTERFACE PATTERN FOR THE SIDEBAR ITEMS
 interface RecommendedCourseItem {
   courseCode: string;
   courseName: string;
@@ -76,9 +76,8 @@ export default function DesktopGridDashboard() {
   const router = useRouter();
   const [chatInput, setChatInput] = useState("");
   const [timetableCourses, setTimetableCourses] = useState<BackendCourse[]>([]);
-  const [totalCredits, setTotalCredits] = useState(0);
   
-  // Dashboard Intel API States
+  // 🌟 Dashboard Intel API States (包含由后端精准计算下发的学分指标体系)
   const [metrics, setMetrics] = useState<DashboardMetrics>({ currentCredits: 0, minCredits: 12, maxCredits: 19 });
   const [systemNotice, setSystemNotice] = useState<DashboardSystemNotice>({ status: "SAFE", message: "Synchronizing intelligence context matrices..." });
   const [intelAlerts, setIntelAlerts] = useState<DashboardAlert[]>([]);
@@ -104,7 +103,7 @@ export default function DesktopGridDashboard() {
           const json = await response.json();
           if (json.success && json.data) {
             setTimetableCourses(json.data);
-            setTotalCredits(json.data.length * 3);
+            // 🌟 核心修改点：移除了原本前端粗暴写死的 length * 3 计算，完全交由下面的 intel 接口拉取真实学分
           }
         }
       } catch (err) {
@@ -217,13 +216,10 @@ export default function DesktopGridDashboard() {
           </form>
         </section>
 
-        {/* ================================================================= */}
-        {/* 🌟 核心修改点：仅重组 COLUMN 4 | ROWS 1-6 的 ALERTS AREA 行为样式 */}
-        {/* ================================================================= */}
+        {/* COLUMN 4 | ROWS 1-6: ALERTS AREA */}
         <section className="col-span-1 row-span-6 rounded-2xl p-4 border flex flex-col shadow-sm transition-colors bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800 overflow-hidden">
           <div className="flex items-center justify-between mb-3 shrink-0 text-slate-900 dark:text-white">
-             <h2 className="text-xs font-bold tracking-tight">Alerts & Notifications</h2>
-             <span className="text-[10px] font-bold text-cyan-600 cursor-pointer">View all</span>
+             <h2 className="text-xs font-bold tracking-tight">Ai Suggestions</h2>
           </div>
           
           <div className="space-y-2.5 flex-grow overflow-y-auto pr-1 min-h-0">
@@ -239,7 +235,6 @@ export default function DesktopGridDashboard() {
                    </div>
                  </div>
 
-                 {/* 🚀 AI Recommendation List Parser Node Map */}
                  {alert.recommendedCourses && alert.recommendedCourses.length > 0 && (
                    <div className="space-y-1.5 pt-1.5 border-t border-slate-200/60 dark:border-slate-800/60">
                      {alert.recommendedCourses.map((course, idx) => (
@@ -292,18 +287,19 @@ export default function DesktopGridDashboard() {
               </div>
             </div>
 
+            {/* 🌟 核心改进点：这里的当前注册学分与最大允许上限，直接读取后端返回的 metrics 数据 */}
             <div className="p-4 rounded-xl border flex flex-col justify-between bg-slate-50/50 border-slate-100 dark:bg-slate-950/20 dark:border-slate-800">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Credit Hours Load</p>
                 <div className="flex justify-between items-center mt-1">
                   <h3 className="text-sm font-bold text-slate-800 dark:text-zinc-200">Current Load</h3>
-                  <span className="text-[10px] font-mono font-bold text-slate-400">{totalCredits} / 19 Hours</span>
+                  <span className="text-[10px] font-mono font-bold text-slate-400">{metrics.currentCredits} / {metrics.maxCredits} Hours</span>
                 </div>
               </div>
               <div className="w-full bg-slate-200 dark:bg-slate-800 h-2 rounded-full overflow-hidden mt-3">
                 <div 
                   className="bg-cyan-500 h-full rounded-full transition-all duration-500"
-                  style={{ width: `${(totalCredits / 19) * 100}%` }}
+                  style={{ width: `${metrics.maxCredits > 0 ? (metrics.currentCredits / metrics.maxCredits) * 100 : 0}%` }}
                 />
               </div>
             </div>
@@ -314,7 +310,8 @@ export default function DesktopGridDashboard() {
         <section className="col-span-3 row-span-2 rounded-2xl p-5 border flex flex-col shadow-sm transition-colors justify-between bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800">
           <div className="flex items-center justify-between w-full shrink-0">
              <h2 className="text-xs font-bold tracking-tight text-slate-900 dark:text-white">Current Plan Overview</h2>
-             <span className="text-[10px] font-bold text-slate-600 font-mono">{totalCredits} Credits Registered</span>
+             {/* 🌟 核心改进点：底部的总注册学分看板，同步更新为消费后端 metrics.currentCredits 数据 */}
+             <span className="text-[10px] font-bold text-slate-600 font-mono">{metrics.currentCredits} Credits Registered</span>
           </div>
 
           <div className="grid grid-cols-5 gap-2.5 flex-grow mt-3 items-stretch">

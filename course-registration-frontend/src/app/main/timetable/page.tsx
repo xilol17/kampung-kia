@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import toast, { Toaster } from "react-hot-toast"; // 🌟 引入 Toast 引擎保证提示质感一致
 
 // Shared icon dictionary
 const Icon = ({ name }: { name: string }) => {
@@ -29,6 +30,7 @@ interface BackendTimeSlot {
 interface BackendCourse {
   courseCode: string;
   courseName: string;
+  creditHours: number; 
   sectionNumber: string;
   venue: string;
   status: string;
@@ -63,48 +65,114 @@ export default function TimetablePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
   
+  // 动态状态：用来存储从后端拉取并累加出的真实总学分
+  const [totalCredits, setTotalCredits] = useState(0);
+  const [isDropping, setIsDropping] = useState(false); // 🌟 防连续触发锁状态
+  
   // 控制弹窗表单的开启以及存储当前被点击的课程详情
   const [selectedCourse, setSelectedCourse] = useState<any | null>(null);
 
-  // Dynamic side-effect fetch operation
-  useEffect(() => {
-    const fetchTimetable = async () => {
-      try {
-        setIsLoading(true);
-        setErrorNotice(null);
+  // 📡 封装的核心数据获取管道
+  const fetchTimetable = async () => {
+    try {
+      setIsLoading(true);
+      setErrorNotice(null);
 
-        const token = document.cookie
-          .split("; ")
-          .find((row) => row.startsWith("token="))
-          ?.split("=")[1];
+      const token = document.cookie
+        .split("; ")
+        .find((row) => row.startsWith("token="))
+        ?.split("=")[1];
 
-        const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
-        const response = await fetch(`${baseUrl}/api/portal/timetable`, {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            ...(token ? { "Authorization": `Bearer ${token}` } : {}),
-          },
-        });
+      const response = await fetch(`${baseUrl}/api/portal/timetable`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+        },
+      });
 
-        if (response.ok) {
-          const json: TimetableApiResponse = await response.json();
-          setTimetableData(json);
+      if (response.ok) {
+        const json: TimetableApiResponse = await response.json();
+        setTimetableData(json);
+        
+        // 遍历后端下发的真实 data 数组，将每一门课的 creditHours 累加
+        if (json.data && json.data.length > 0) {
+          const dynamicCalculatedCredits = json.data.reduce(
+            (sum, course) => sum + (course.creditHours ?? 0), 
+            0
+          );
+          setTotalCredits(dynamicCalculatedCredits);
         } else {
-          const errData = await response.json().catch(() => ({}));
-          setErrorNotice(errData.message || "Failed to retrieve class schedule records.");
+          setTotalCredits(0);
         }
-      } catch (err) {
-        console.error("Timetable bridge synchronization fault:", err);
-        setErrorNotice("Network interface error: Could not connect to schedule server.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
 
+      } else {
+        const errData = await response.json().catch(() => ({}));
+        setErrorNotice(errData.message || "Failed to retrieve class schedule records.");
+      }
+    } catch (err) {
+      console.error("Timetable bridge synchronization fault:", err);
+      setErrorNotice("Network interface error: Could not connect to schedule server.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchTimetable();
   }, []);
+
+  // 🌟 核心新增点：真实提交后端退选处理流程 (Integrated drop submission executor)
+  const handleDropCourseSubmit = async (courseCode: string) => {
+    if (isDropping) return;
+    setIsDropping(true);
+
+    setSelectedCourse(null); // 平滑关闭当前弹窗窗口
+    
+    // 触发暗黑硬核质感退选加载框
+    const dropToastId = toast.loading(`Terminating registration records for ${courseCode}...`, {
+      style: { background: '#1e1b4b', color: '#f87171', border: '1px solid #ef4444' }
+    });
+
+    try {
+      const token = document.cookie
+        .split("; ")
+        .find((row) => row.startsWith("token="))
+        ?.split("=")[1];
+
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+
+      const response = await fetch(`${baseUrl}/api/portal/course/drop`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ courseCode }), // 将要退选的科目代码打包传送给后端
+      });
+
+      const json = await response.json();
+
+      if (json.success) {
+        // 玫瑰红赛博注销通知
+        toast.success(`Successfully dropped ${courseCode}. Credits recalculated.`, {
+          id: dropToastId,
+          style: { background: '#0f172a', color: '#f43f5e', border: '1px solid #e11d48', fontWeight: 'bold' },
+          icon: '🗑️'
+        });
+        fetchTimetable(); // 隐式刷新，重新拉取并重构最新课表矩阵
+      } else {
+        toast.error(json.message || "Failed to drop module parameter restrictions.", { id: dropToastId });
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error("Network system fault. Failed to synchronize core node drop.", { id: dropToastId });
+    } finally {
+      setIsDropping(false);
+    }
+  };
 
   // 格式化时间的辅助函数 (1600 -> "16:00")
   const formatTimeNum = (timeNum: number) => {
@@ -168,13 +236,14 @@ export default function TimetablePage() {
   };
 
   const processedCourses = getProcessedCourses();
-
   const totalCoursesCount = timetableData?.data?.length || 0;
-  const calculatedTotalCredits = totalCoursesCount * 3;
 
   return (
     <div className="w-full max-w-[calc(100vw-16rem)] h-full p-3.5 font-sans overflow-hidden transition-colors duration-300">
       
+      {/* 挂载全局全局 Toast 容器提示面板 */}
+      <Toaster position="bottom-right" reverseOrder={false} />
+
       {/* MASSIVE MASTER TIME TABLE SHEET CANVAS */}
       <main className="w-full h-full rounded-2xl border p-4 flex flex-col shadow-sm bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800 transition-colors overflow-hidden">
         
@@ -206,7 +275,7 @@ export default function TimetablePage() {
             <div className="absolute inset-0 bg-rose-50/40 backdrop-blur-sm dark:bg-rose-950/5 flex flex-col items-center justify-center z-10 p-6 text-center">
               <span className="text-2xl mb-2">📡</span>
               <p className="text-xs font-mono font-bold text-rose-600 dark:text-rose-400 max-w-sm">{errorNotice}</p>
-              <button onClick={() => window.location.reload()} className="mt-4 text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 bg-slate-900 text-white dark:bg-white dark:text-slate-900 rounded-lg shadow active:scale-95 transition">
+              <button onClick={() => window.location.reload()} className="mt-4 text-[10px] font-bold uppercase tracking-wider px-3 py-1.5 bg-slate-950 text-white dark:bg-white dark:text-slate-900 rounded-lg shadow active:scale-95 transition">
                 Retry Matrix Sync
               </button>
             </div>
@@ -223,7 +292,6 @@ export default function TimetablePage() {
           {/* Matrix Core Rows */}
           <div className="flex-grow overflow-hidden divide-y divide-slate-100 dark:divide-slate-800">
             {TIME_SLOTS.map((timeSlot) => (
-              /* 🌟 修改点：为了放大课表矩阵，将每行最小高度从 min-h-[44px] 扩大到 min-h-[62px] */
               <div key={timeSlot} className="grid grid-cols-6 items-stretch min-h-[59px]">
                 
                 {/* Time indicator */}
@@ -244,7 +312,6 @@ export default function TimetablePage() {
                             activeDay: day,
                             activeSlot: timeSlot
                           })}
-                          /* 🌟 修改点：随矩阵一同微调大卡片的内边距到 p-1.5 使得版面平衡 */
                           className={`w-full rounded-md p-1.5 border flex flex-col justify-center cursor-pointer transition-all hover:scale-[1.01] hover:brightness-95 active:scale-95 ${
                             currentCourseNode.color === 'cyan'
                               ? 'bg-cyan-50 border-cyan-200 text-cyan-800 dark:bg-cyan-950/20 dark:border-cyan-800/80 dark:text-cyan-300'
@@ -279,7 +346,6 @@ export default function TimetablePage() {
         </div>
 
         {/* Registered Subjects 2-Column Split Matrix with Interactive Hover Effects */}
-        {/* 🌟 修改点：大边框内边距微调，腾出极其完美的空间比例 */}
         <div className="shrink-0 mb-3 px-3 py-2 border rounded-xl bg-slate-50/30 border-slate-100 dark:bg-slate-950/20 dark:border-slate-800">
           <div className="grid grid-cols-2 gap-x-8 gap-y-0.5">
             {timetableData?.data && timetableData.data.length > 0 ? (
@@ -287,9 +353,6 @@ export default function TimetablePage() {
                 <div 
                   key={index}
                   onClick={() => setSelectedCourse({ ...subj })}
-                  /* 🌟 修改点：重构了底部的每一行文本容器类。
-                     增加了 px-2 py-1（提供更大的鼠标悬停触发面积）、rounded-md、
-                     以及 hover:bg-slate-100/60 与 hover:translate-x-1 的平滑变色右移交互特效 */
                   className="flex items-center text-[10px] font-bold tracking-wide cursor-pointer transition-all duration-200 text-slate-800 dark:text-zinc-200 hover:text-cyan-600 dark:hover:text-cyan-400 py-1 px-2 rounded-md hover:bg-slate-100/60 dark:hover:bg-slate-800/40 hover:translate-x-1"
                 >
                   <span className="font-mono text-slate-950 dark:text-white shrink-0 min-w-[65px]">
@@ -325,7 +388,7 @@ export default function TimetablePage() {
           
           <div className="text-right flex items-center gap-2">
             <span className="text-[12px] font-bold uppercase tracking-wider text-slate-600">Current Credit Hours :</span>
-            <span className="text-xs font-black font-mono text-cyan-600 dark:text-cyan-400">{calculatedTotalCredits} Total Credits Registered</span>
+            <span className="text-xs font-black font-mono text-cyan-600 dark:text-cyan-400">{totalCredits} Total Credits Registered</span>
           </div>
         </div>
 
@@ -333,8 +396,14 @@ export default function TimetablePage() {
 
       {/* Details Form Modal Pop-up Layout */}
       {selectedCourse && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-md rounded-2xl border shadow-2xl overflow-hidden bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800 transform transition-all scale-100 p-5 space-y-4">
+        <div 
+          onClick={() => setSelectedCourse(null)} 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()} 
+            className="w-full max-w-md rounded-2xl border shadow-2xl overflow-hidden bg-white border-slate-200 dark:bg-slate-900 dark:border-slate-800 transform transition-all scale-100 p-5 space-y-4"
+          >
             
             {/* Form Header */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
@@ -367,7 +436,7 @@ export default function TimetablePage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[9px] font-black uppercase tracking-wider text-slate-400 block font-mono">Assigned Credit Hours</label>
-                  <p className="text-xs font-bold text-slate-800 dark:text-zinc-200 mt-0.5">3.00 Credits</p>
+                  <p className="text-xs font-bold text-slate-800 dark:text-zinc-200 mt-0.5">{(selectedCourse.creditHours ?? 3).toFixed(2)} Credits</p>
                 </div>
                 <div>
                   <label className="text-[9px] font-black uppercase tracking-wider text-slate-400 block font-mono">Staging Venue Node</label>
@@ -397,13 +466,22 @@ export default function TimetablePage() {
               </div>
             </div>
 
-            {/* Form Action Footer */}
-            <div className="pt-2 flex justify-end">
+            {/* Form Action Footer Grid */}
+            <div className="pt-2 flex justify-end gap-3">
               <button 
+                type="button"
                 onClick={() => setSelectedCourse(null)}
-                className="px-4 py-2 text-[11px] font-bold text-white bg-slate-950 hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-300 rounded-xl shadow transition active:scale-95"
+                className="px-4 py-2 text-[11px] font-bold border border-slate-200 text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 rounded-xl transition active:scale-95"
               >
-                Acknowledge Parameters
+                Cancel
+              </button>
+              {/* 🌟 核心调用：将原本无响应的闭合动作，绑定为你指定的动态后端注销请求 */}
+              <button 
+                type="button"
+                onClick={() => handleDropCourseSubmit(selectedCourse.courseCode)}
+                className="px-4 py-2 text-[11px] font-bold text-white bg-rose-600 hover:bg-rose-500 rounded-xl shadow-md transition active:scale-95"
+              >
+                Drop Course
               </button>
             </div>
 

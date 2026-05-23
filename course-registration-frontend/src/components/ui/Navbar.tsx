@@ -12,6 +12,7 @@ const Icon = ({ name }: { name: string }) => {
     structure: "📐",
     register: "📋", // 🌟 ADDED: Clipboard icon for manual registration
     chatbot: "🤖",
+    
   };
   return <span>{icons[name] || "•"}</span>;
 };
@@ -38,8 +39,8 @@ export default function Navbar({
     { name: "Dashboard", id: "dashboard", icon: "dashboard", href: "/main/dashboard" },
     { name: "My Timetable", id: "timetable", icon: "calendar", href: "/main/timetable" },
     { name: "Course Search", id: "search", icon: "search", href: "/main/search_course" },
-    { name: "Course Structure", id: "structure", icon: "structure", href: "/main/course_structure" }, 
     { name: "Manual Register", id: "register", icon: "register", href: "/main/manual_register" },
+    { name: "Course Structure", id: "structure", icon: "structure", href: "/main/course_structure" }, 
     { name: "Chatbot", id: "chatbot", icon: "chatbot", href: "/main/chatbot" },
   ];
 
