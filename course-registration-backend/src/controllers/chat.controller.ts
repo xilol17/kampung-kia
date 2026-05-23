@@ -58,52 +58,117 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
 
     const uniqueFailedCourses = [...new Set(activeFailedCourses)];
     
+    // 🌟 修复 2：提取当前课表代码，喂给 AI，防止它幻觉说你没课！
+    const currentCodesArray = Array.from(currentCodes);
+    const currentCodesStr = currentCodesArray.length > 0 ? currentCodesArray.join(', ') : 'No courses registered yet';
+    
     // ==========================================
     // 2. 构造“绝密纸条” (System Prompt)
     // ==========================================
     let systemPrompt = `
       You are Laozu, an advanced autonomous university course registration AI system.
+
       Current active semester: ${settings?.activeSemester}
-      Current student: ${student.name} (${student.id}), Program: ${student.program}
+
+      Current student:
+      - Name: ${student.name}
+      - Student ID: ${student.id}
+      - Program: ${student.program}
+      - Currently Enrolled Courses: ${currentCodesStr}
+
+      Your role is NOT just to chat. You are an AI academic assistant capable of automatically registering courses, dropping courses, swapping sections, generating study plans, checking prerequisites, checking graduation progress, and searching available courses.
     `;
 
     if (uniqueFailedCourses.length > 0) {
-      systemPrompt += `\n[CRITICAL]: Student has FAILED courses to retake: ${uniqueFailedCourses.join(', ')}. Proactively remind them!`;
+      systemPrompt += `
+      ==================================================
+      [CRITICAL FAILED COURSE INFORMATION]
+      ==================================================
+        This student currently has FAILED courses that require retake:
+        ${uniqueFailedCourses.join(', ')}
+
+        You MUST proactively remind the student about retaking these courses whenever relevant.
+      `;
     }
 
     systemPrompt += `
+      ==================================================
       [COURSE DICTIONARY]
-      OOP -> BCS2143 | HCI -> BCS2173 | PT -> BCI1023 | DS -> BCI1093
+      ==================================================
+      Translate course nicknames or abbreviations into official course codes.
+      - OOP / Object Oriented Programming -> BCS2143
+      - HCI / Human Computer Interaction -> BCS2173
+      - PT / Programming Technique -> BCI1023
+      - DS / Data Structure -> BCI1093
 
+      ==================================================
+      [ANTI-HALLUCINATION RULE]
+      ==================================================
+      If the course mentioned by the student does not exist, is unclear, ambiguous, or incomplete:
+      - set courseCode to ""
+      - NEVER invent fake course codes
+      - NEVER guess
+
+      ==================================================
+      [SUPPORTED INTENTS & MAPPING]
+      ==================================================
+      Map student natural language to the correct intent:
+      - "register/add/sign up" -> REGISTER_COURSE
+      - "drop/remove/cancel" -> DROP_COURSE
+      - "swap/switch/change section" -> SWAP_COURSE
+      - "search/find/query course" -> SEARCH_COURSE
+      - "recommend/recommendation/give me a plan" -> RECOMMEND_PLAN
+      - "check credit/progress/graduation" -> CHECK_PROGRESS
+      - "timetable/schedule/my classes" -> VIEW_TIMETABLE
+      - "prerequisite/check pre-req" -> CHECK_PREREQUISITE
+
+      ==================================================
       [PREFERENCE EXTRACTION RULES]
+      ==================================================
+      Translate natural language into preference object:
       - "no Thursday class" -> globalAvoidDays: [4]
-      - "no morning class / 不要早八" -> globalAvoidTimeBefore: 1200
-      - "dont want class 8am" -> globalAvoidTimeBefore: 900
-      - "need rest time in between / break" -> requireLunchBreak: true
+      - "no morning class / 不要早八" -> globalAvoidTimeBefore: 900
+      - "no 8am class" -> globalAvoidTimeBefore: 900
+      - "dont want class 8 am" -> globalAvoidTimeBefore: 900
+      - "不要早十" -> globalAvoidTimeBefore: 1100
+      - "need lunch break" -> requireLunchBreak: true
       - "I want Dr Wong" -> preferredLecturer: "Dr Wong"
 
+      ==================================================
       [JSON OUTPUT RULE]
+      ==================================================
       You MUST return VALID RAW JSON ONLY.
-      🚨 [CRITICAL MULTI-TASK RULE]: If the student asks to register MULTIPLE courses, you MUST extract EVERY SINGLE COURSE into a separate object in the "actions" array. DO NOT COMBINE COURSE CODES.
 
-      [RESPONSE FORMAT]
+      🚨 [CRITICAL MULTI-TASK RULE]: 
+      If the student asks to register/drop/swap MULTIPLE courses (e.g., 6 courses), you MUST extract EVERY SINGLE COURSE into its own separate object inside the "actions" array.
+      DO NOT COMBINE THEM. DO NOT JUST OUTPUT ONE. Extract ALL of them.
+
+      [RESPONSE FORMAT EXAMPLE]
       {
-        "reply": "Natural response",
+        "reply": "Natural response to the student",
         "actions": [
           {
             "intent": "REGISTER_COURSE",
             "actionData": {
-              "courseCode": "ULM1312", 
+              "courseCode": "BCS2143",
               "targetSection": "",
-              "preferences": { "globalAvoidTimeBefore": 900, "requireLunchBreak": true }
+              "preferences": { "globalAvoidTimeBefore": 900 }
             }
+          },
+          {
+            "intent": "RECOMMEND_PLAN",
+            "actionData": {}
+          },
+          {
+            "intent": "VIEW_TIMETABLE",
+            "actionData": {}
           }
         ]
       }
       `;
 
     // ==========================================
-    // 🌟 核心换脑手术：Groq Llama-70B 担任大脑
+    // 🌟 核心换脑手术：Groq Llama-70B 担任最高智商大脑！
     // ==========================================
     let aiResponse: any;
 
@@ -115,12 +180,14 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
     try {
       let groqSuccess = false;
 
+      // 1. 首发主力：Groq 70B 
       try {
         const groqCompletion = await groq.chat.completions.create({
           model: "llama-3.3-70b-versatile",
           messages: [
             { role: "system", content: systemPrompt },
-            { role: "user", content: `Please extract EVERY SINGLE course mentioned into the actions array. \n\nStudent Message: "${message}"` }
+            // 🌟 修复：解除只提取 course 的魔咒，允许全局意图！
+            { role: "user", content: `Generate JSON response. If asking for recommendations or timetable, use corresponding intent with empty actionData. If registering/dropping, extract ALL courses mentioned into actions array. \n\nStudent Message: "${message}"` }
           ],
           response_format: { type: "json_object" },
           temperature: 0.1
@@ -129,16 +196,21 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
         const groqText = groqCompletion.choices[0]?.message?.content || "{}";
         aiResponse = safeParseAIJson(groqText);
         groqSuccess = true;
+        logger.info(`[AI Engine] Groq 70B 大脑成功解析意图！`);
+
       } catch (groqError: any) {
         logger.error(`[AI Engine] Groq 70B 解析失败:`, groqError.message);
       }
 
+      // 2. 替补队员：Gemini Lite 
       if (!groqSuccess) {
+        logger.warn("[AI Engine] 切换至 Gemini 备用大脑...");
         const currentAI = getGenAIInstance();
         const model = currentAI.getGenerativeModel({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.1-flash-lite',
           generationConfig: { responseMimeType: "application/json" }
         });
+
         const result = await model.generateContent({
           contents: [
             { role: 'user', parts: [{ text: systemPrompt }] },
@@ -149,6 +221,7 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
       }
 
     } catch (allAIError: any) {
+      logger.error(`[AI Engine] 所有 AI 引擎全部崩溃:`, allAIError.message);
       const currentTimetable = await getStudentTimetable(studentId, activeSemester);
       res.status(200).json({
         reply: "⚠️ 抱歉同学，当前 AI 选课系统暂时繁忙，请稍后再试一次。",
@@ -159,18 +232,17 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     // ==========================================
-    // 🌟 3. 执行引擎：防御性代码 (极其重要！)
+    // 🌟 3. 执行引擎：防御与流水线处理
     // ==========================================
     let executionFeedback = ""; 
     let needTimetable = false;  
     let structuredDataPayload: any = {}; 
 
-    // 这个神级函数负责把 AI 乱吐的 courseCode 洗干净
+    // 🌟 重新引回神级清洗函数，防止小写和数组崩溃！
     const sanitizeCourseCodes = (rawCode: any): string[] => {
       if (!rawCode) return [];
       if (Array.isArray(rawCode)) return rawCode.map(c => c.toUpperCase().replace(/[^A-Z0-9]/g, ''));
       if (typeof rawCode === 'string') {
-        // 如果 AI 偷懒写成 "ulm1312, ulj1312"，按逗号切分！
         return rawCode.split(',').map(c => c.toUpperCase().replace(/[^A-Z0-9]/g, ''));
       }
       return [];
@@ -180,13 +252,10 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
       const intent = action.intent;
       const data = action.actionData || {};
       const prefs = data.preferences || { avoidDays: [], avoidTimeBefore: 0 };
-
-      // 🚨 获取洗干净的、全大写的、拆分好的课程代码数组
       const codesToProcess = sanitizeCourseCodes(data.courseCode);
 
       switch (intent) {
         case 'REGISTER_COURSE':
-          // 不管 AI 吐出来的是一个还是一堆，我们都在这里循环消化掉！
           for (const cleanCode of codesToProcess) {
             const res = await registerCourseAction(studentId, cleanCode, activeSemester, prefs);
             executionFeedback += `\n▶️ [选课 ${cleanCode}]: ${res.message}`;
@@ -214,6 +283,7 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
           break;
 
         case 'VIEW_TIMETABLE':
+          executionFeedback += `\n✅ 已成功提取当前课表数据，准备在前端展示。`; // 🌟 修复 2：写入日志，激活嘴巴！
           needTimetable = true;
           break;
 
@@ -233,10 +303,29 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
           break;
 
         case 'CHECK_PROGRESS':
-        case 'CHECK_PREREQUISITE':
-          // ... 篇幅所限，略微精简，保持原有逻辑
+          const progRes = await checkStudentProgressAction(studentId, activeSemester);
+          if (progRes.success) {
+            executionFeedback += `\n✅ 已生成【毕业学分动态进度看板】。`;
+            structuredDataPayload.progressReport = progRes.data;
+          }
           break;
 
+        case 'CHECK_PREREQUISITE':
+          for (const cleanCode of codesToProcess) {
+            const preRes = await checkPrerequisiteAction(cleanCode);
+            if (preRes.success && preRes.data) {
+              const listStr = preRes.data.hasPrerequisites 
+                ? preRes.data.prerequisites.map((p: any) => `【${p.prerequisiteName} (${p.prerequisiteCode})】`).join('、')
+                : '无前置科目门槛。';
+              executionFeedback += `\n🔍 【${preRes.data.courseName}】的先修要求：${listStr}`;
+              structuredDataPayload.prerequisiteInfo = preRes.data;
+            } else {
+              executionFeedback += `\n❌ 查询提示：${preRes.message}`;
+            }
+          }
+          break;
+
+        case 'CHAT':
         default:
           break;
       }
@@ -250,6 +339,8 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
     if (executionFeedback) {
       const detectLanguage = (text: string) => {
         if (/[\u4e00-\u9fff]/.test(text)) return "Chinese";
+        if (/[\u0E00-\u0E7F]/.test(text)) return "Thai";
+        if (/[\u0600-\u06FF]/.test(text)) return "Arabic";
         return "English";
       };
 
@@ -258,17 +349,21 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
       const mouthPrompt = `
         You are Laozu, a university course registration AI assistant.
         Student message: "${message}"
+        Detected student language: ${studentLanguage}
 
-        The backend system has executed the actions:
+        The backend system has executed the following actions:
         """
         ${executionFeedback}
         """
 
         Rules:
-        1. Reply ONLY in ${studentLanguage}.
-        2. 🚨 CRITICAL: YOU MUST ONLY REPORT WHAT IS EXACTLY WRITTEN IN THE BACKEND LOGS. 
-        3. 🚨 IF A COURSE IS NOT IN THE LOGS, DO NOT SAY IT WAS REGISTERED.
-        4. Output natural language only.
+        1. You MUST reply ONLY in ${studentLanguage}.
+        2. Ignore the language used inside backend logs.
+        3. Do not use Chinese unless the student's message is Chinese.
+        4. Be friendly, clear, and professional.
+        5. 🚨 CRITICAL ANTI-HALLUCINATION RULE: YOU MUST ONLY REPORT WHAT IS EXACTLY WRITTEN IN THE BACKEND LOGS. 
+        6. 🚨 IF A COURSE IS NOT MENTIONED IN THE LOGS, DO NOT SAY YOU REGISTERED IT. Do not invent course codes.
+        7. Output normal natural language only. Do not output JSON.
       `;
 
       try {
@@ -284,6 +379,7 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
         finalNaturalReply = pass2Result.response.text();
 
       } catch (pass2Error) {
+        logger.error("[AI Mouth] 二次润色失败，回退到原始缝合文本", pass2Error);
         finalNaturalReply = `${aiResponse.reply}\n\n⚙️ 统筹执行反馈：${executionFeedback}`;
       }
     }
