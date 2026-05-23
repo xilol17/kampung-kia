@@ -34,7 +34,6 @@ export const getCourseStructure = async (req: AuthRequest, res: Response): Promi
   try {
     const studentId = req.user.userId;
 
-    // 1. 抓取学生信息及所有的修课记录
     const student = await prisma.user.findUnique({
       where: { id: studentId },
       include: { 
@@ -49,7 +48,6 @@ export const getCourseStructure = async (req: AuthRequest, res: Response): Promi
       return;
     }
 
-    // 2. 抓取该学生专业的培养目录，并做成字典方便查找
     const catalogItems = await prisma.catalogItem.findMany({
       where: { programCode: student.program },
       include: { course: true }
@@ -59,41 +57,57 @@ export const getCourseStructure = async (req: AuthRequest, res: Response): Promi
     const completed: any[] = [];
     const incompleted: any[] = [];
 
-    // 3. 核心修复 1：Completed 列表直接来源于真实的及格记录！
-    const passedEnrollments = student.enrollments.filter(e => e.status === 'PASSED');
-    const passedCourseCodes = new Set(passedEnrollments.map(e => e.section.courseCode));
+    // 1. 提取真正已经及格的课（用于决定这门课是否要从 Incompleted 列表剔除）
+    const passedCourseCodes = new Set(
+      student.enrollments.filter(e => e.status === 'PASSED').map(e => e.section.courseCode)
+    );
 
-    passedEnrollments.forEach(record => {
+    // 🌟 2. 核心修复：历史记录必须包含 PASSED 和 FAILED！挂科也是修过的记录！
+    const historicalRecords = student.enrollments.filter(e => ['PASSED', 'FAILED'].includes(e.status));
+
+    historicalRecords.forEach((record: any) => {
       const course = record.section.course;
-      const catalogInfo = catalogMap.get(course.courseCode); // 看看培养手册里有没有这门课
+      const catalogInfo = catalogMap.get(course.courseCode);
 
       completed.push({
         code: course.courseCode,
-        courseTitle: course.courseName,           // 🌟 修复：对齐截图 COURSE TITLE
-        creditHours: course.creditHours || 3,
-        category: catalogInfo?.courseType || "-", // 🌟 修复：如果没有目录信息，显示 "-" (对齐截图)
-        year: catalogInfo?.year || "-",           // 🌟 修复：如果没有目录信息，显示 "-" (对齐截图)
-        passFail: "Y",                            // 🌟 修复：对齐截图 PASS/FAIL 列的绿字 "Y"
-        grade: record.grade || "PASS"             // 保留具体的 A / B+ 供其他地方使用
+        courseTitle: course?.courseName || "Unknown",
+        creditHours: course?.creditHours || 3,
+        category: catalogInfo?.courseType || "-",
+        year: catalogInfo?.year || "-",
+        // 🌟 如果挂了，就显示 N，让前端可以标红
+        passFail: record.status === 'PASSED' ? "Y" : "N", 
+        grade: record.grade || (record.status === 'PASSED' ? "PASS" : "FAIL")
       });
     });
 
-    // 4. 核心修复 2：Incompleted 列表来源于 Catalog 中还没及格的课
-    catalogItems.forEach(item => {
-      // 如果这门课没有及格，就放进未完成列表
+    // 3. 处理还没及格的课
+    catalogItems.forEach((item: any) => {
+      // 只要没有及格，就通通放进未完成列表
       if (!passedCourseCodes.has(item.courseCode)) {
-        // 检查是不是这学期正在上
+        
+        // 这学期正在上吗？
         const isCurrent = student.enrollments.some(
-          e => e.section.courseCode === item.courseCode && ['PENDING_PA', 'APPROVED'].includes(e.status)
+          (e: any) => e.section.courseCode === item.courseCode && ['PENDING_PA', 'APPROVED'].includes(e.status)
         );
         
+        // 🌟 核心修复：这门课是不是曾经挂过？
+        const isFailed = student.enrollments.some(
+          (e: any) => e.section.courseCode === item.courseCode && e.status === 'FAILED'
+        );
+        
+        // 优先级判定：如果在上就是 IN_PROGRESS，如果是挂了就是 FAILED，否则就是纯白纸 NOT_TAKEN
+        let currentStatus = "NOT_TAKEN";
+        if (isCurrent) currentStatus = "IN_PROGRESS";
+        else if (isFailed) currentStatus = "FAILED";
+
         incompleted.push({
           code: item.courseCode,
-          courseTitle: item.course.courseName,
-          creditHours: item.course.creditHours || 3,
+          courseTitle: item.course?.courseName || "Unknown",
+          creditHours: item.course?.creditHours || 3,
           category: item.courseType || "-",
           year: item.year || "-",
-          status: isCurrent ? "IN_PROGRESS" : "NOT_TAKEN"
+          status: currentStatus // 🌟 前端现在可以拿到 FAILED，并把这行变成醒目的红色警示！
         });
       }
     });
@@ -102,8 +116,8 @@ export const getCourseStructure = async (req: AuthRequest, res: Response): Promi
       success: true,
       program: student.program,
       data: {
-        completed,     // 前端直接拿去 map 渲染截图里的表格
-        incompleted    // 前端画另一个未完成表格
+        completed,
+        incompleted
       }
     });
   } catch (error) {
