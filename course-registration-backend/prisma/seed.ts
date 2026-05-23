@@ -500,10 +500,10 @@ async function seedStudentHistory() {
   const cb24002PassedSem2 = ['UQA2002', 'ULE1310', 'ULE1322', 'BUM1433', 'BCI2023', 'BCN1053', 'BCS1133'];
 
   for (const courseCode of cb24002PassedSem2) {
-    await enrollStudent({ userId: 'CB24002', courseCode, semester: ACTIVE_SEMESTER, status: 'PASSED', grade: 'B' });
+    await enrollStudent({ userId: 'CB24002', courseCode, semester: '2425-SEM1', status: 'PASSED', grade: 'B' });
   }
 
-  await enrollStudent({ userId: 'CB24002', courseCode: 'BCI1023', semester: ACTIVE_SEMESTER, status: 'FAILED', grade: 'F' });
+  await enrollStudent({ userId: 'CB24002', courseCode: 'BCI1023', semester: '2425-SEM1', status: 'FAILED', grade: 'F' });
 
   // =====================================================
   // Dummy students to fill selected sections.

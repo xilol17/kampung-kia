@@ -300,6 +300,8 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
       ==================================================
 
       You MUST return VALID RAW JSON ONLY.
+      🚨 [CRITICAL MULTI-TASK RULE]: 
+      If the student asks to register/drop/swap MULTIPLE courses (e.g., 6 courses), you MUST generate MULTIPLE objects inside the "actions" array! EXACTLY ONE OBJECT PER COURSE. DO NOT stop at the first course!
 
       DO NOT:
       - use markdown
@@ -410,7 +412,7 @@ try {
     logger.warn("[AI Engine] Gemini 全部失败，切换到 Groq Backup");
 
     const groqCompletion = await groq.chat.completions.create({
-      model: "llama-3.1-8b-instant",
+      model: "llama-3.3-70b-versatile",
 
       messages: [
         {
