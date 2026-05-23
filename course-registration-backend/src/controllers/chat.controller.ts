@@ -120,7 +120,17 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
       - "recommend/recommendation/give me a plan" -> RECOMMEND_PLAN
       - "check credit/progress/graduation" -> CHECK_PROGRESS
       - "timetable/schedule/my classes" -> VIEW_TIMETABLE
-      - "prerequisite/check pre-req" -> CHECK_PREREQUISITE
+      - "prerequisite/check pre-req" -> CHECK_PREREQUISITE\
+
+      ==================================================
+      [SECTION FORMATTING RULE]
+      ==================================================
+      If the student specifies a target section number (e.g., "section 1", "sec 2"), you MUST explicitly zero-pad it to a 2-digit string in the JSON output.
+      
+      Examples:
+      - "section 1" -> "01"
+      - "sec 2" -> "02"
+      - "section 12" -> "12"
 
       ==================================================
       [PREFERENCE EXTRACTION RULES]
@@ -133,6 +143,13 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
       - "不要早十" -> globalAvoidTimeBefore: 1100
       - "need lunch break" -> requireLunchBreak: true
       - "I want Dr Wong" -> preferredLecturer: "Dr Wong"
+
+      [CONVERSATION GUIDELINES]
+      1. If the student asks to drop or swap, and they haven't specified the course:
+         - Acknowledge the request.
+         - Show the list of their currently enrolled courses (from the context I gave you).
+         - Ask them to pick one from the list.
+         - Do NOT make them guess.
 
       ==================================================
       [JSON OUTPUT RULE]
@@ -238,6 +255,20 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
     let needTimetable = false;  
     let structuredDataPayload: any = {}; 
 
+    const lowerMessage = message.toLowerCase();
+
+    if (
+      aiResponse.actions.length === 0 &&
+      (
+        lowerMessage.includes("drop course") ||
+        lowerMessage.includes("drop a course") ||
+        lowerMessage.includes("remove course") ||
+        lowerMessage.includes("cancel course")
+      )
+    ) {
+      needTimetable = true;
+    }
+
     // 🌟 重新引回神级清洗函数，防止小写和数组崩溃！
     const sanitizeCourseCodes = (rawCode: any): string[] => {
       if (!rawCode) return [];
@@ -291,6 +322,11 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
           for (const cleanCode of codesToProcess) {
             const res = await searchCourseAction(cleanCode, activeSemester);
             executionFeedback += `\n\n🔍 查课 ${cleanCode} 结果：\n${res.message}`;
+            structuredDataPayload.searchResults = res.data;
+
+            if (res.success && res.data) {
+              structuredDataPayload.searchResults = res.data;
+            }
           }
           break;
 

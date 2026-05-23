@@ -250,6 +250,7 @@ export const getStudentTimetable = async (userId: string, semester: string) => {
   return enrollments.map(e => ({
     courseCode: e.section.courseCode,
     courseName: e.section.course.courseName,
+    creditHours: e.section.course.creditHours,
     sectionNumber: e.section.sectionNumber,
     venue: e.section.venue,
     status: e.status,
@@ -466,7 +467,33 @@ export const searchCourseAction = async (courseCode: string, semester: string) =
     resultText += `▶ Sec ${sec.sectionNumber} | 讲师: ${lecturer} | 时间: ${times} | 地点: ${sec.venue} | 容量: ${sec.capacity}人\n`;
   });
 
-  return { success: true, message: resultText };
+  return {
+    success: true,
+    message: resultText,
+    data: {
+      courseCode,
+      courseName,
+      semester,
+      sections: sections.map(sec => ({
+        id: sec.id,
+        sectionNumber: sec.sectionNumber,
+        capacity: sec.capacity,
+        venue: sec.venue,
+        lecturer: sec.lecturer
+          ? {
+              id: sec.lecturer.id,
+              name: sec.lecturer.name,
+              email: sec.lecturer.email
+            }
+          : null,
+        timeSlots: sec.timeSlots.map(ts => ({
+          dayOfWeek: ts.dayOfWeek,
+          startTime: ts.startTime,
+          endTime: ts.endTime
+        }))
+      }))
+    }
+  };
 };
 
 export const recommendPlanAction = async (userId: string, semester: string) => {

@@ -208,6 +208,8 @@ export const getDashboardIntel = async (req: AuthRequest, res: Response): Promis
     // 2. 挖掘挂科黑历史
     const passedCodes = new Set(student.enrollments.filter(e => e.status === 'PASSED').map(e => e.section.courseCode));
     const currentCodes = new Set(currentEnrollments.map(e => e.section.courseCode));
+
+    
     
     const activeFailedCourses = student.enrollments
       .filter(e => e.status === 'FAILED')
@@ -339,6 +341,15 @@ export const manualRegisterApi = async (req: AuthRequest, res: Response): Promis
       res.status(400).json({ success: false, message: `🚫 Max Credit Hours: Current ${currentTotalCredits} credit hours, if registered it will exceed the 19 credit hours limit!` });
       return;
     }
+    console.log("Current enrollments:", currentEnrollments.map(e => ({
+  courseCode: e.section.course.courseCode,
+  creditHours: e.section.course.creditHours,
+  status: e.status
+})));
+
+console.log("Current total credits:", currentTotalCredits);
+console.log("New course credit:", newCredit);
+console.log("After register:", currentTotalCredits + newCredit);
 
     // 🛡️ 3. 检查先修课 (Prerequisites)
     const prerequisites = await prisma.prerequisite.findMany({
