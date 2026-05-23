@@ -1,0 +1,720 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.checkPrerequisiteAction = exports.recommendPlanAction = exports.searchCourseAction = exports.swapCourseAction = exports.dropCourseAction = exports.getStudentTimetable = exports.registerCourseAction = void 0;
+const prisma_1 = require("../config/prisma");
+const logger_1 = require("../utils/logger");
+const registerCourseAction = async (userId, courseCode, semester, rawPreferences = {}) => {
+    logger_1.logger.info(`[Action] Student ${userId} attempting to register for ${courseCode} in ${semester}`);
+    // 🌟 0. 安全解构偏好设置 (防止 AI 漏传字段导致报错)
+    const prefs = {
+        globalAvoidDays: [], globalAvoidTimeBefore: 0, avoidSpecificBlocks: [],
+        preferredLecturer: '', avoidLecturer: '',
+        requireLunchBreak: false, preferCompactSchedule: false,
+        ...rawPreferences
+    };
+    const existingEnrollment = await prisma_1.prisma.enrollment.findFirst({
+        where: {
+            userId: userId,
+            semester: semester,
+            section: { courseCode: courseCode }, // 关联查这门课的代码
+            status: { in: ['PENDING_PA', 'APPROVED'] } // 只要是待审批或已通过的，都不准再选！
+        },
+        include: { section: true }
+    });
+    if (existingEnrollment) {
+        logger_1.logger.warn(`[Action] Blocked! Student ${userId} is already enrolled in ${courseCode} (Sec ${existingEnrollment.section.sectionNumber}).`);
+        return {
+            success: false,
+            message: `🚫 选课失败：你已经报名了这门课的 Sec ${existingEnrollment.section.sectionNumber}！请勿重复选课。如果想换班级，请先退课或使用换课功能。`
+        };
+    }
+    const targetCourse = await prisma_1.prisma.course.findUnique({ where: { courseCode: courseCode } });
+    const newCourseCredit = targetCourse?.creditHours || 3;
+    // 2. 查出学生这学期已经选了多少课
+    const currentEnrollments = await prisma_1.prisma.enrollment.findMany({
+        where: { userId: userId, semester: semester, status: { in: ['PENDING_PA', 'APPROVED'] } },
+        include: { section: { include: { course: true, timeSlots: true } } }
+    });
+    // 3. 极其优雅地把现有总学分加起来
+    const currentTotalCredits = currentEnrollments.reduce((sum, e) => sum + (e.section.course.creditHours || 3), 0);
+    // 4. 判死刑：如果现有学分 + 新课学分 > 19，直接踢回去！
+    if (currentTotalCredits + newCourseCredit > 19) {
+        logger_1.logger.warn(`[Action] Blocked! Student ${userId} exceeded 19 credit limit.`);
+        return {
+            success: false,
+            message: `🚫 选课拦截：UMPSA 规定每学期最高上限为 19 学分。你当前已选 ${currentTotalCredits} 学分，加上这门课（${newCourseCredit} 学分）将达到 ${currentTotalCredits + newCourseCredit} 学分，超出系统限制！请先退选其他科目。`
+        };
+    }
+    // ==========================================
+    // 🛡️ 第一关：前置科目 (Prerequisites) 绝对防御系统
+    // ==========================================
+    const prerequisites = await prisma_1.prisma.prerequisite.findMany({
+        where: { courseCode: courseCode },
+        include: { prerequisiteCourse: true }
+    });
+    if (prerequisites.length > 0) {
+        const passedRecords = await prisma_1.prisma.enrollment.findMany({
+            where: { userId: userId, status: 'PASSED' },
+            select: { section: { select: { courseCode: true } } }
+        });
+        const passedCourseCodes = passedRecords.map(r => r.section.courseCode);
+        for (const pre of prerequisites) {
+            if (!passedCourseCodes.includes(pre.prerequisiteCode)) {
+                logger_1.logger.warn(`[Action] Blocked! Student ${userId} failed prerequisite ${pre.prerequisiteCode} for ${courseCode}.`);
+                return {
+                    success: false,
+                    message: `🚫 选课失败：你必须先及格前置科目【${pre.prerequisiteCourse.courseName} (${pre.prerequisiteCode})】才能选修这门课！`
+                };
+            }
+        }
+    }
+    // ==========================================
+    // ⏰ 第二关：提取已有课表与备选班级
+    // ==========================================
+    const occupiedSlots = currentEnrollments.flatMap(e => e.section.timeSlots);
+    const existingDays = new Set(occupiedSlots.map(s => s.dayOfWeek)); // 记录学生哪几天已经有课了
+    const availableSectionsRaw = await prisma_1.prisma.section.findMany({
+        where: { courseCode: courseCode, semester: semester },
+        include: {
+            timeSlots: true,
+            lecturer: true,
+            enrollments: {
+                where: {
+                    status: { in: ['PENDING_PA', 'APPROVED'] }
+                }
+            }
+        }
+    });
+    const availableSections = availableSectionsRaw.filter(section => section.enrollments.length < section.capacity);
+    if (availableSections.length === 0) {
+        return {
+            success: false,
+            message: `选课失败：${courseCode} 本学期所有 Section 都已经满人。`
+        };
+    }
+    // ==========================================
+    // 🧠 第三关：智能偏好打分引擎 (Preference Scoring)
+    // ==========================================
+    let scoredSections = availableSections.map(section => {
+        let score = 100; // 初始满分 100 分
+        let compromises = []; // 记录扣分原因，用于最后给学生反馈
+        // 1. 老师偏好检查
+        if (prefs.preferredLecturer && section.lecturer?.name.includes(prefs.preferredLecturer)) {
+            score += 50; // 遇到喜欢的老师，疯狂加分！
+        }
+        if (prefs.avoidLecturer && section.lecturer?.name.includes(prefs.avoidLecturer)) {
+            score -= 100;
+            compromises.push("妥协了避雷老师");
+        }
+        // 2. 时间与作息偏好检查
+        for (const slot of section.timeSlots) {
+            // 触犯全局黑名单日期 (比如拜五)
+            if (prefs.globalAvoidDays.includes(slot.dayOfWeek)) {
+                score -= 50;
+                compromises.push("妥协了休息日");
+            }
+            // 触犯早起禁忌 (比如早八)
+            if (prefs.globalAvoidTimeBefore > 0 && slot.startTime < prefs.globalAvoidTimeBefore) {
+                score -= 50;
+                compromises.push("妥协了早起时间");
+            }
+            // 侵犯午饭时间 (假设午饭时间是 1200 - 1400)
+            if (prefs.requireLunchBreak && slot.startTime < 1400 && slot.endTime > 1200) {
+                score -= 40;
+                compromises.push("挤占了午休时间");
+            }
+            // 紧凑排课奖励 (如果这天本来就有课，奖励加分，鼓励把课凑在同一天)
+            if (prefs.preferCompactSchedule && existingDays.has(slot.dayOfWeek)) {
+                score += 20;
+            }
+            // 触犯特定时段黑名单 (比如拜四早八)
+            for (const block of prefs.avoidSpecificBlocks) {
+                if (slot.dayOfWeek === block.dayOfWeek && slot.startTime < block.endTime && slot.endTime > block.startTime) {
+                    score -= 60;
+                    compromises.push("妥协了特定回避时段");
+                }
+            }
+        }
+        // 返回带分数的班级对象
+        return { ...section, preferenceScore: score, compromises: [...new Set(compromises)] };
+    });
+    // 🏅 将班级按分数从高到低排序！系统会优先测试最爽的班级！
+    scoredSections.sort((a, b) => b.preferenceScore - a.preferenceScore);
+    // ==========================================
+    // ⚔️ 第四关：防撞车查杀与最终定夺
+    // ==========================================
+    let targetSection = null;
+    for (const section of scoredSections) {
+        let hasConflict = false;
+        // 严格的时间碰撞检测 (不可妥协的硬性条件)
+        for (const newSlot of section.timeSlots) {
+            for (const occupied of occupiedSlots) {
+                if (newSlot.dayOfWeek === occupied.dayOfWeek) {
+                    if (newSlot.startTime < occupied.endTime && newSlot.endTime > occupied.startTime) {
+                        hasConflict = true;
+                        break;
+                    }
+                }
+            }
+            if (hasConflict)
+                break;
+        }
+        if (!hasConflict) {
+            targetSection = section; // 找到了不撞车的最高分班级！
+            break;
+        }
+    }
+    if (!targetSection) {
+        logger_1.logger.error(`[Action] Failed. All sections for ${courseCode} conflict with ${userId}'s schedule.`);
+        return { success: false, message: `⚠️ 选课失败：这门课所有可用的班级都与你目前的课表存在时间冲突！` };
+    }
+    // ==========================================
+    // ✅ 第五关：完美入库与高情商反馈
+    // ==========================================
+    try {
+        await prisma_1.prisma.enrollment.create({
+            data: {
+                userId: userId,
+                courseCode: courseCode,
+                sectionId: targetSection.id,
+                semester: semester,
+                status: 'PENDING_PA'
+            }
+        });
+        // 动态生成系统的邀功/解释信息
+        let extraMsg = '';
+        // 如果有妥协扣分 (分数 < 100)
+        if (targetSection.preferenceScore < 100 && targetSection.compromises.length > 0) {
+            extraMsg = `\n(⚠️ 注：为了避开你的课表冲突，系统不得不安排了 Sec ${targetSection.sectionNumber}。本次排课 ${targetSection.compromises.join('、')}，敬请谅解。)`;
+        }
+        // 只有当分数 > 100 (意味着遇到了指定的首选老师，获得了 +50 加分) 才极度炫耀
+        else if (targetSection.preferenceScore > 100) {
+            extraMsg = `\n(✨ 完美！系统为你锁定的 Sec ${targetSection.sectionNumber} 不仅没冲突，还成功帮你抢到了你偏好的老师！)`;
+        }
+        // 普普通通的默认情况
+        else {
+            extraMsg = `\n(✅ 已成功排入 Sec ${targetSection.sectionNumber}，无时间冲突。)`;
+        }
+        logger_1.logger.info(`[Action] Success! Student enrolled in ${courseCode} Sec ${targetSection.sectionNumber}. Score: ${targetSection.preferenceScore}`);
+        return {
+            success: true,
+            message: `成功提交 ${courseCode} 的选课申请，等待 PA 审批。${extraMsg}`,
+            registeredSection: targetSection // 核心！交出刚选上的班级数据
+        };
+    }
+    catch (error) {
+        logger_1.logger.error(`[Action] Database error for Student ${userId} on Course ${courseCode}.`, error);
+        return { success: false, message: `数据库写入失败，可能该科目已在你的课表中。` };
+    }
+};
+exports.registerCourseAction = registerCourseAction;
+const getStudentTimetable = async (userId, semester) => {
+    const enrollments = await prisma_1.prisma.enrollment.findMany({
+        where: {
+            userId: userId,
+            semester: semester,
+            status: { in: ['PENDING_PA', 'APPROVED'] }
+        },
+        include: {
+            section: {
+                include: { course: true, timeSlots: true }
+            }
+        }
+    });
+    return enrollments.map(e => ({
+        courseCode: e.section.courseCode,
+        courseName: e.section.course.courseName,
+        creditHours: e.section.course.creditHours,
+        sectionNumber: e.section.sectionNumber,
+        venue: e.section.venue,
+        status: e.status,
+        timeSlots: e.section.timeSlots.map(ts => ({
+            dayOfWeek: ts.dayOfWeek,
+            startTime: ts.startTime,
+            endTime: ts.endTime
+        }))
+    }));
+};
+exports.getStudentTimetable = getStudentTimetable;
+const dropCourseAction = async (userId, courseCode, semester) => {
+    logger_1.logger.info(`[Action] Student ${userId} attempting to drop ${courseCode} in ${semester}`);
+    // 1. 查找该学生这学期有没有选这门课
+    const existingEnrollment = await prisma_1.prisma.enrollment.findFirst({
+        where: {
+            userId: userId,
+            semester: semester,
+            section: { courseCode: courseCode },
+            status: { in: ['PENDING_PA', 'APPROVED'] } // 必须是正常在读的课才能退
+        },
+        include: { section: true } // 顺便把班级信息带出来，用于写日志和提示
+    });
+    // 2. 拦截：如果他根本没选这门课，直接报错
+    if (!existingEnrollment) {
+        logger_1.logger.warn(`[Action] Drop failed. Student ${userId} is not enrolled in ${courseCode}.`);
+        return {
+            success: false,
+            message: `🚫 退课失败：你的课表中并没有找到 ${courseCode}。系统无法退选你没有报名的课程。`
+        };
+    }
+    // 3. 执行：在黑客松为了数据干净，我们直接物理删除这条报名记录（释放时间槽）
+    try {
+        // 找出这门被退掉的课的学分
+        const droppedCourse = await prisma_1.prisma.course.findUnique({ where: { courseCode: courseCode } });
+        const droppedCredit = droppedCourse?.creditHours || 3;
+        // 算出学生退课前这学期总共有多少学分
+        const currentEnrollments = await prisma_1.prisma.enrollment.findMany({
+            where: { userId: userId, semester: semester, status: { in: ['PENDING_PA', 'APPROVED'] } },
+            include: { section: { include: { course: true } } }
+        });
+        const oldTotalCredits = currentEnrollments.reduce((sum, e) => sum + (e.section.course.creditHours || 3), 0);
+        // 退课后的剩余学分
+        const newTotalCredits = oldTotalCredits - droppedCredit;
+        // 物理删除记录
+        await prisma_1.prisma.enrollment.delete({
+            where: { id: existingEnrollment.id }
+        });
+        // 🌟 动态生成高情商/严厉的反馈信息
+        let extraMsg = '';
+        if (newTotalCredits < 12) {
+            extraMsg = `\n🚨 【严重警告】：退选后你本学期的总学分将降至 ${newTotalCredits} 分！已低于 UMPSA 全日制本科生规定的最低下限（12 学分）。这可能会导致你的 PA 拒绝审批或影响你的全职学生身份，请务必尽快补选其他课程！`;
+        }
+        logger_1.logger.info(`[Action] Success! Student ${userId} dropped ${courseCode}. Remaining credits: ${newTotalCredits}`);
+        return {
+            success: true,
+            message: `✅ 退课成功！已将 ${courseCode} 从课表中移除。${extraMsg}`
+        };
+    }
+    catch (error) {
+        logger_1.logger.error(`[Action] Database error during drop for ${userId} on ${courseCode}.`, error);
+        return { success: false, message: `系统数据库发生错误，退课失败。` };
+    }
+};
+exports.dropCourseAction = dropCourseAction;
+const swapCourseAction = async (userId, courseCode, semester, targetSectionNum = "", rawPreferences = {}) => {
+    logger_1.logger.info(`[Action] Student ${userId} attempting to swap ${courseCode} in ${semester}`);
+    // 1. 拦截检查：看看他现在到底有没有选这门课
+    const existingEnrollment = await prisma_1.prisma.enrollment.findFirst({
+        where: { userId: userId, semester: semester, section: { courseCode: courseCode }, status: { in: ['PENDING_PA', 'APPROVED'] } },
+        include: { section: true }
+    });
+    if (!existingEnrollment) {
+        return { success: false, message: `🚫 换课失败：你的课表中目前没有找到 ${courseCode}，请直接使用加课功能。` };
+    }
+    const oldSectionNumber = existingEnrollment.section.sectionNumber;
+    // 2. 如果用户指定了想换去的班级，且刚好就是现在的班级，直接打回
+    if (targetSectionNum && targetSectionNum === oldSectionNumber) {
+        return { success: false, message: `⚠️ 你目前已经在 ${courseCode} 的 Sec ${oldSectionNumber} 了，无需更换。` };
+    }
+    // 3. 💥 核心算法：提取当前时间表，但必须“假装”那门老课已经被删掉了！(时间海剔除)
+    const allEnrollments = await prisma_1.prisma.enrollment.findMany({
+        where: { userId: userId, semester: semester, status: { in: ['PENDING_PA', 'APPROVED'] } },
+        include: { section: { include: { timeSlots: true } } }
+    });
+    const occupiedSlots = allEnrollments
+        .filter(e => e.id !== existingEnrollment.id) // 极其关键：把即将被换掉的老班级时间挪走，腾出空间！
+        .flatMap(e => e.section.timeSlots);
+    // 4. 找到所有可以换的候选班级 (剔除现在的班级)
+    let availableSections = await prisma_1.prisma.section.findMany({
+        where: { courseCode: courseCode, semester: semester, id: { not: existingEnrollment.sectionId } },
+        include: {
+            timeSlots: true,
+            lecturer: true,
+            enrollments: {
+                where: {
+                    status: { in: ['PENDING_PA', 'APPROVED'] }
+                }
+            }
+        }
+    });
+    availableSections = availableSections.filter(section => section.enrollments.length < section.capacity);
+    // 如果用户明确指定了要换去哪个班 (比如 02 班)
+    if (targetSectionNum) {
+        availableSections = availableSections.filter(sec => sec.sectionNumber === targetSectionNum);
+        if (availableSections.length === 0)
+            return { success: false, message: `抱歉，${courseCode} 本学期没有 Sec ${targetSectionNum}。` };
+    }
+    else if (availableSections.length === 0) {
+        return { success: false, message: `抱歉，${courseCode} 目前没有其他可供调剂的班级了。` };
+    }
+    // 5. 再次请出我们的智能偏好查杀引擎 (极简版)
+    let targetSection = null;
+    for (const section of availableSections) {
+        let hasConflict = false;
+        for (const newSlot of section.timeSlots) {
+            for (const occupied of occupiedSlots) {
+                if (newSlot.dayOfWeek === occupied.dayOfWeek && newSlot.startTime < occupied.endTime && newSlot.endTime > occupied.startTime) {
+                    hasConflict = true;
+                    break;
+                }
+            }
+            if (hasConflict)
+                break;
+        }
+        if (!hasConflict) {
+            targetSection = section; // 找到第一个不撞车的就直接锁定
+            break;
+        }
+    }
+    if (!targetSection) {
+        return { success: false, message: `⚠️ 换课失败：其他班级的时间都与你的现存课表有冲突！已为你保留原有的 Sec ${oldSectionNumber}。` };
+    }
+    // 6. 🏆 终极绝杀：Prisma 原子事务 (Transaction) 保证绝对安全
+    try {
+        await prisma_1.prisma.$transaction([
+            // 动作 A：删掉老班级
+            prisma_1.prisma.enrollment.delete({ where: { id: existingEnrollment.id } }),
+            // 动作 B：加入新班级
+            prisma_1.prisma.enrollment.create({
+                data: {
+                    userId: userId,
+                    courseCode: courseCode,
+                    sectionId: targetSection.id,
+                    semester: semester,
+                    status: 'PENDING_PA'
+                }
+            })
+        ]);
+        logger_1.logger.info(`[Action] Swap Success! Student ${userId} moved from Sec ${oldSectionNumber} to Sec ${targetSection.sectionNumber}.`);
+        // 翻译新班级的时间用于通知
+        const dayMap = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+        const timeStrings = targetSection.timeSlots.map(ts => {
+            const s = ts.startTime.toString().padStart(4, '0');
+            const e = ts.endTime.toString().padStart(4, '0');
+            return `${dayMap[ts.dayOfWeek]} ${s.slice(0, 2)}:${s.slice(2)} - ${e.slice(0, 2)}:${e.slice(2)}`;
+        }).join('，');
+        return {
+            success: true,
+            message: `✅ 换课成功！已安全将你从 Sec ${oldSectionNumber} 调剂至 Sec ${targetSection.sectionNumber}。\n📅 新上课时间：${timeStrings} | 地点：${targetSection.venue}`
+        };
+    }
+    catch (error) {
+        logger_1.logger.error(`[Action] Transaction error during swap for ${userId}.`, error);
+        return { success: false, message: `系统数据库发生错误，换课失败，你的原班级已保留。` };
+    }
+};
+exports.swapCourseAction = swapCourseAction;
+const searchCourseAction = async (courseCode, semester) => {
+    // 查找所有开班信息，把时间、讲师、科目名称全带出来
+    const sections = await prisma_1.prisma.section.findMany({
+        where: { courseCode: courseCode, semester: semester },
+        include: { timeSlots: true, lecturer: true, course: true }
+    });
+    if (sections.length === 0) {
+        return { success: false, message: `抱歉，${courseCode} 在本学期没有任何开班记录。` };
+    }
+    // 把复杂的数据翻译成极其漂亮的排版文字！
+    const courseName = sections[0].course.courseName;
+    let resultText = `为您查到【${courseName} (${courseCode})】本学期的开班信息如下：\n`;
+    const dayMap = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    sections.forEach(sec => {
+        const times = sec.timeSlots.map(ts => {
+            const startStr = ts.startTime.toString().padStart(4, '0');
+            const endStr = ts.endTime.toString().padStart(4, '0');
+            return `${dayMap[ts.dayOfWeek]} ${startStr.slice(0, 2)}:${startStr.slice(2)} - ${endStr.slice(0, 2)}:${endStr.slice(2)}`;
+        }).join('，');
+        const lecturer = sec.lecturer ? sec.lecturer.name : '待定(TBA)';
+        resultText += `▶ Sec ${sec.sectionNumber} | 讲师: ${lecturer} | 时间: ${times} | 地点: ${sec.venue} | 容量: ${sec.capacity}人\n`;
+    });
+    return {
+        success: true,
+        message: resultText,
+        data: {
+            courseCode,
+            courseName,
+            semester,
+            sections: sections.map(sec => ({
+                id: sec.id,
+                sectionNumber: sec.sectionNumber,
+                capacity: sec.capacity,
+                venue: sec.venue,
+                lecturer: sec.lecturer
+                    ? {
+                        id: sec.lecturer.id,
+                        name: sec.lecturer.name,
+                        email: sec.lecturer.email
+                    }
+                    : null,
+                timeSlots: sec.timeSlots.map(ts => ({
+                    dayOfWeek: ts.dayOfWeek,
+                    startTime: ts.startTime,
+                    endTime: ts.endTime
+                }))
+            }))
+        }
+    };
+};
+exports.searchCourseAction = searchCourseAction;
+const recommendPlanAction = async (userId, semester) => {
+    logger_1.logger.info(`[Action] Generating course recommendations for Student ${userId} in ${semester}`);
+    const MAX_CREDIT = 19;
+    // 1. Get student info
+    const student = await prisma_1.prisma.user.findUnique({
+        where: { id: userId }
+    });
+    if (!student) {
+        return {
+            success: false,
+            message: "Student not found.",
+            data: null
+        };
+    }
+    const studentProgram = student.program || "BCS";
+    const studentCurrentSem = student.currentSem || 1;
+    // Convert currentSem to catalog year + semester
+    // currentSem 1 = Year 1 Sem 1
+    // currentSem 2 = Year 1 Sem 2
+    // currentSem 3 = Year 2 Sem 1
+    const targetYear = Math.ceil(studentCurrentSem / 2);
+    const targetSemester = studentCurrentSem % 2 === 0 ? 2 : 1;
+    // 2. Get all enrollment history
+    const history = await prisma_1.prisma.enrollment.findMany({
+        where: { userId },
+        include: {
+            section: {
+                include: {
+                    course: true
+                }
+            },
+            course: true
+        }
+    });
+    const passedCodes = new Set(history
+        .filter(e => e.status === "PASSED")
+        .map(e => e.courseCode || e.section.courseCode));
+    const currentCodes = new Set(history
+        .filter(e => e.semester === semester &&
+        ["PENDING_PA", "APPROVED"].includes(e.status))
+        .map(e => e.courseCode || e.section.courseCode));
+    const failedCodes = new Set(history
+        .filter(e => e.status === "FAILED")
+        .map(e => e.courseCode || e.section.courseCode));
+    const activeFailedCodes = [...failedCodes].filter(code => !passedCodes.has(code) && !currentCodes.has(code));
+    // 3. Calculate current semester credits correctly
+    const currentSemesterCredits = history
+        .filter(e => e.semester === semester &&
+        ["PENDING_PA", "APPROVED"].includes(e.status))
+        .reduce((sum, e) => {
+        return sum + (e.course?.creditHours ?? e.section.course.creditHours ?? 0);
+    }, 0);
+    let availableCredits = MAX_CREDIT - currentSemesterCredits;
+    // If already full, still return useful info
+    if (availableCredits <= 0) {
+        return {
+            success: true,
+            message: "Credit limit already reached.",
+            data: {
+                studentCurrentSem,
+                targetYear,
+                targetSemester,
+                currentTakenCredits: currentSemesterCredits,
+                maxCredits: MAX_CREDIT,
+                remainingCredits: 0,
+                isCreditFull: true,
+                creditMessage: `You already have ${currentSemesterCredits}/${MAX_CREDIT} credit hours. ` +
+                    `No additional courses can be recommended unless you drop some courses.`,
+                recommendedNewCredits: 0,
+                totalProjectedCredits: currentSemesterCredits,
+                mustRetake: [],
+                canTake: [],
+                reason: "CREDIT_LIMIT_REACHED"
+            }
+        };
+    }
+    // 4. Get catalog courses:
+    // Recommend:
+    // - current semester catalog courses
+    // - previous catalog courses not passed yet
+    const catalogItems = await prisma_1.prisma.catalogItem.findMany({
+        where: {
+            programCode: studentProgram,
+            OR: [
+                {
+                    year: targetYear,
+                    semester: targetSemester
+                },
+                {
+                    year: {
+                        lt: targetYear
+                    }
+                },
+                {
+                    year: targetYear,
+                    semester: {
+                        lt: targetSemester
+                    }
+                }
+            ]
+        },
+        include: {
+            course: true
+        },
+        orderBy: [
+            { year: "asc" },
+            { semester: "asc" },
+            { courseCode: "asc" }
+        ]
+    });
+    // 5. Only recommend courses that have sections this semester
+    const availableSections = await prisma_1.prisma.section.findMany({
+        where: { semester },
+        include: {
+            course: true,
+            enrollments: {
+                where: {
+                    status: {
+                        in: ["PENDING_PA", "APPROVED"]
+                    }
+                }
+            }
+        }
+    });
+    const availableCourseMap = new Map();
+    for (const section of availableSections) {
+        const isNotFull = section.enrollments.length < section.capacity;
+        if (isNotFull && !availableCourseMap.has(section.courseCode)) {
+            availableCourseMap.set(section.courseCode, section.course);
+        }
+    }
+    // 6. Get prerequisites
+    const candidateCodes = catalogItems.map(item => item.courseCode);
+    const prerequisites = await prisma_1.prisma.prerequisite.findMany({
+        where: {
+            courseCode: {
+                in: candidateCodes
+            }
+        },
+        include: {
+            prerequisiteCourse: true
+        }
+    });
+    const preReqMap = new Map();
+    for (const pre of prerequisites) {
+        if (!preReqMap.has(pre.courseCode)) {
+            preReqMap.set(pre.courseCode, []);
+        }
+        preReqMap.get(pre.courseCode).push(pre.prerequisiteCode);
+    }
+    // 7. Build qualified courses
+    const mustRetakeCandidates = [];
+    const canTakeCandidates = [];
+    const blockedByPrerequisite = [];
+    const notOfferedThisSemester = [];
+    for (const item of catalogItems) {
+        const course = item.course;
+        const code = course.courseCode;
+        // Already passed or currently taking
+        if (passedCodes.has(code) || currentCodes.has(code)) {
+            continue;
+        }
+        // No available section this semester
+        if (!availableCourseMap.has(code)) {
+            notOfferedThisSemester.push({
+                courseCode: code,
+                courseName: course.courseName,
+                creditHours: course.creditHours,
+                year: item.year,
+                semester: item.semester
+            });
+            continue;
+        }
+        const reqs = preReqMap.get(code) || [];
+        const missingPrerequisites = reqs.filter(req => !passedCodes.has(req));
+        if (missingPrerequisites.length > 0) {
+            blockedByPrerequisite.push({
+                courseCode: code,
+                courseName: course.courseName,
+                creditHours: course.creditHours,
+                missingPrerequisites
+            });
+            continue;
+        }
+        const formattedCourse = {
+            courseCode: code,
+            courseName: course.courseName,
+            creditHours: course.creditHours,
+            year: item.year,
+            semester: item.semester,
+            courseType: item.courseType
+        };
+        if (activeFailedCodes.includes(code)) {
+            mustRetakeCandidates.push(formattedCourse);
+        }
+        else {
+            canTakeCandidates.push(formattedCourse);
+        }
+    }
+    // 8. Fill recommendation within credit limit
+    const finalPlan = {
+        mustRetake: [],
+        canTake: []
+    };
+    let plannedCredits = 0;
+    for (const course of mustRetakeCandidates) {
+        const credit = course.creditHours ?? 0;
+        if (availableCredits >= credit) {
+            finalPlan.mustRetake.push(course);
+            availableCredits -= credit;
+            plannedCredits += credit;
+        }
+    }
+    for (const course of canTakeCandidates) {
+        const credit = course.creditHours ?? 0;
+        if (availableCredits >= credit) {
+            finalPlan.canTake.push(course);
+            availableCredits -= credit;
+            plannedCredits += credit;
+        }
+    }
+    const structuredData = {
+        studentCurrentSem,
+        targetYear,
+        targetSemester,
+        currentTakenCredits: currentSemesterCredits,
+        maxCredits: MAX_CREDIT,
+        availableCredits: MAX_CREDIT - currentSemesterCredits,
+        recommendedNewCredits: plannedCredits,
+        totalProjectedCredits: currentSemesterCredits + plannedCredits,
+        mustRetake: finalPlan.mustRetake,
+        canTake: finalPlan.canTake,
+        skipped: {
+            blockedByPrerequisite,
+            notOfferedThisSemester
+        }
+    };
+    return {
+        success: true,
+        message: "Course recommendation plan generated successfully.",
+        data: structuredData
+    };
+};
+exports.recommendPlanAction = recommendPlanAction;
+const checkPrerequisiteAction = async (courseCode) => {
+    logger_1.logger.info(`[Action] Querying prerequisites for course ${courseCode}`);
+    // 1. 查出这门科目本身的信息
+    const targetCourse = await prisma_1.prisma.course.findUnique({
+        where: { courseCode: courseCode }
+    });
+    if (!targetCourse) {
+        return { success: false, message: `未能在系统数据库中找到科目代码为 [${courseCode}] 的课程。` };
+    }
+    // 2. 查出该科目绑定的所有前置科目
+    const prerequisites = await prisma_1.prisma.prerequisite.findMany({
+        where: { courseCode: courseCode },
+        include: { prerequisiteCourse: true }
+    });
+    const structuredData = {
+        courseCode: targetCourse.courseCode,
+        courseName: targetCourse.courseName,
+        hasPrerequisites: prerequisites.length > 0,
+        prerequisites: prerequisites.map(p => ({
+            prerequisiteCode: p.prerequisiteCode,
+            prerequisiteName: p.prerequisiteCourse.courseName
+        }))
+    };
+    return {
+        success: true,
+        message: "先修条件数据提取成功",
+        data: structuredData
+    };
+};
+exports.checkPrerequisiteAction = checkPrerequisiteAction;
