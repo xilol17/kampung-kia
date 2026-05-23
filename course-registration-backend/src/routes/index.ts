@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { handleChat } from '../controllers/chat.controller';
 import { login } from '../controllers/auth.controller';
 import { verifyToken } from '../middlewares/auth.middleware';
-import { getMyTimetable, getCourseStructure, searchCoursesApi } from '../controllers/portal.controller';
+import { getMyTimetable, getCourseStructure, searchCoursesApi, getDashboardIntel,manualRegisterApi } from '../controllers/portal.controller';
 const router = Router();
 
 // check health
@@ -18,5 +18,8 @@ router.post('/chat', verifyToken, handleChat);
 router.get('/portal/timetable', verifyToken, getMyTimetable);
 router.get('/portal/course-structure', verifyToken, getCourseStructure);
 router.get('/portal/courses/search', verifyToken, searchCoursesApi);
+router.get('/portal/dashboard-intel', verifyToken, getDashboardIntel);
+
+router.post('/portal/register', verifyToken, manualRegisterApi);
 
 export default router;

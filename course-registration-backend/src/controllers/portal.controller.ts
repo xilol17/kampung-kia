@@ -184,3 +184,233 @@ export const searchCoursesApi = async (req: AuthRequest, res: Response): Promise
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+export const getDashboardIntel = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const studentId = req.user.userId;
+    const settings = await prisma.systemSetting.findFirst();
+    const activeSemester = settings?.activeSemester || '2526-SEM1';
+
+    const student = await prisma.user.findUnique({
+      where: { id: studentId },
+      include: { enrollments: { include: { section: { include: { course: true } } } } }
+    });
+
+    if (!student) {
+      res.status(404).json({ success: false, message: "Student not found" });
+      return;
+    }
+
+    // 1. 统计当前学分
+    const currentEnrollments = student.enrollments.filter(e => e.semester === activeSemester && ['PENDING_PA', 'APPROVED'].includes(e.status));
+    const currentCredits = currentEnrollments.reduce((sum, e) => sum + (e.section.course.creditHours || 3), 0);
+
+    // 2. 挖掘挂科黑历史
+    const passedCodes = new Set(student.enrollments.filter(e => e.status === 'PASSED').map(e => e.section.courseCode));
+    const currentCodes = new Set(currentEnrollments.map(e => e.section.courseCode));
+    
+    const activeFailedCourses = student.enrollments
+      .filter(e => e.status === 'FAILED')
+      .filter(e => !passedCodes.has(e.section.courseCode) && !currentCodes.has(e.section.courseCode));
+
+    // =================================
+    // 🎨 组装中间区域：System Notice
+    // =================================
+    let systemNotice = { status: "SAFE", message: "" };
+
+    if (activeFailedCourses.length > 0) {
+      systemNotice = {
+        status: "CRITICAL",
+        message: `🚨 CRITICAL: 检测到上学期【${activeFailedCourses[0].section.courseCode}】未及格！该科目是核心前置条件，请务必在本学期优先重修！`
+      };
+    } else if (currentCredits < 12) {
+      systemNotice = {
+        status: "WARNING",
+        message: `⚠️ AI Warning: 当前仅注册 ${currentCredits} 学分，低于教务处规定的最低 12 学分要求。请尽快通过右侧矩阵补选！`
+      };
+    } else {
+      systemNotice = {
+        status: "SAFE",
+        message: `⚡ Systems Nominal. 当前已安全注册 ${currentCredits} 学分。你的选课策略已超越 82% 的同届节点。`
+      };
+    }
+
+    // =================================
+    // 📡 组装右侧区域：Alerts & Notifications
+    // =================================
+    const alerts: any[] = [];
+
+    // Alert 1: 必须重修警告 (如果有的话)
+    if (activeFailedCourses.length > 0) {
+      alerts.push({
+        id: "alert_retake",
+        type: "CRITICAL",
+        title: "Mandatory Retake Action",
+        description: `${activeFailedCourses[0].section.course.courseName} requires immediate registration.`,
+        timeAgo: "Just now",
+        actionBtn: { label: "Auto-Fix", actionType: "CHAT", payload: `Help me register ${activeFailedCourses[0].section.courseCode}` }
+      });
+    }
+
+    // Alert 2: 捡漏雷达 (寻找一门容量快满的课)
+    // 黑客松小技巧：随便去库里找一门课的满员或快满员的 section
+    const nearlyFullSection = await prisma.section.findFirst({
+      where: { semester: activeSemester },
+      include: { course: true, enrollments: { where: { status: { in: ['PENDING_PA', 'APPROVED'] } } } }
+    });
+
+    if (nearlyFullSection && nearlyFullSection.enrollments.length >= nearlyFullSection.capacity - 2) {
+       alerts.push({
+        id: "alert_snipe",
+        type: "WARNING",
+        title: "High Demand Vector Detected",
+        description: `${nearlyFullSection.course.courseName} (Sec ${nearlyFullSection.sectionNumber}) is almost FULL. Only ${Math.max(0, nearlyFullSection.capacity - nearlyFullSection.enrollments.length)} seats left!`,
+        timeAgo: "2m ago",
+        actionBtn: { label: "Snipe It", actionType: "CHAT", payload: `Register ${nearlyFullSection.courseCode} section ${nearlyFullSection.sectionNumber}` }
+      });
+    }
+
+    // Alert 3: 智能推荐
+    alerts.push({
+        id: "alert_recommend",
+        type: "INFO",
+        title: "AI Optimization Matrix",
+        description: `Based on your pathway, picking up a Core Elective module is highly recommended this semester.`,
+        timeAgo: "1h ago",
+        actionBtn: { label: "Consult AI", actionType: "CHAT", payload: "Can you recommend some courses for me?" }
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        metrics: { currentCredits, minCredits: 12, maxCredits: 19 },
+        systemNotice,
+        alerts
+      }
+    });
+
+  } catch (error) {
+    logger.error("Error fetching dashboard intel:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const manualRegisterApi = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const studentId = req.user.userId;
+    const { courseCode, sectionNumber } = req.body; // 前端必须传这两个参数！
+    
+    if (!courseCode || !sectionNumber) {
+      res.status(400).json({ success: false, message: "Missing courseCode or sectionNumber" });
+      return;
+    }
+
+    const settings = await prisma.systemSetting.findFirst();
+    const activeSemester = settings?.activeSemester || '2526-SEM1';
+
+    // 🛡️ 1. 检查是否已经选过这门课了
+    const existingEnrollment = await prisma.enrollment.findFirst({
+      where: {
+        userId: studentId,
+        semester: activeSemester,
+        section: { courseCode: courseCode },
+        status: { in: ['PENDING_PA', 'APPROVED'] }
+      },
+      include: { section: true }
+    });
+
+    if (existingEnrollment) {
+      res.status(400).json({ success: false, message: `🚫 Failed: You have already registered for Sec ${existingEnrollment.section.sectionNumber}.` });
+      return;
+    }
+
+    // 🛡️ 2. 检查学分上限 (不能超过 19 分)
+    const targetCourse = await prisma.course.findUnique({ where: { courseCode } });
+    const newCredit = targetCourse?.creditHours || 3;
+
+    const currentEnrollments = await prisma.enrollment.findMany({
+      where: { userId: studentId, semester: activeSemester, status: { in: ['PENDING_PA', 'APPROVED'] } },
+      include: { section: { include: { course: true, timeSlots: true } } }
+    });
+    
+    const currentTotalCredits = currentEnrollments.reduce((sum, e) => sum + (e.section.course.creditHours || 3), 0);
+
+    if (currentTotalCredits + newCredit > 19) {
+      res.status(400).json({ success: false, message: `🚫 Max Credit Hours: Current ${currentTotalCredits} credit hours, if registered it will exceed the 19 credit hours limit!` });
+      return;
+    }
+
+    // 🛡️ 3. 检查先修课 (Prerequisites)
+    const prerequisites = await prisma.prerequisite.findMany({
+      where: { courseCode: courseCode },
+      include: { prerequisiteCourse: true }
+    });
+
+    if (prerequisites.length > 0) {
+      const passedRecords = await prisma.enrollment.findMany({
+        where: { userId: studentId, status: 'PASSED' },
+        select: { section: { select: { courseCode: true } } }
+      });
+      const passedCourseCodes = passedRecords.map(r => r.section.courseCode);
+
+      for (const pre of prerequisites) {
+        if (!passedCourseCodes.includes(pre.prerequisiteCode)) {
+          res.status(400).json({ success: false, message: `🚫 Precondition not met: Must pass【${pre.prerequisiteCourse.courseName} (${pre.prerequisiteCode})】first.` });
+          return;
+        }
+      }
+    }
+
+    // 🛡️ 4. 检查班级是否存在、以及是否满人
+    const targetSection = await prisma.section.findFirst({
+      where: { courseCode, sectionNumber, semester: activeSemester },
+      include: { 
+        timeSlots: true,
+        enrollments: { where: { status: { in: ['PENDING_PA', 'APPROVED'] } } } 
+      }
+    });
+
+    if (!targetSection) {
+      res.status(404).json({ success: false, message: "Section not found." });
+      return;
+    }
+
+    if (targetSection.enrollments.length >= targetSection.capacity) {
+      res.status(400).json({ success: false, message: `🚫 Section Full: Sec ${sectionNumber} is full, please choose another section or use AI sniping.` });
+      return;
+    }
+
+    // 🛡️ 5. 硬核时间防撞车检查
+    const occupiedSlots = currentEnrollments.flatMap(e => e.section.timeSlots);
+    for (const newSlot of targetSection.timeSlots) {
+      for (const occupied of occupiedSlots) {
+        if (newSlot.dayOfWeek === occupied.dayOfWeek && newSlot.startTime < occupied.endTime && newSlot.endTime > occupied.startTime) {
+          res.status(400).json({ success: false, message: `🚫 Time Clash: Sec ${sectionNumber} overlaps with your existing timetable!` });
+          return;
+        }
+      }
+    }
+
+    // ✅ 6. 完美通过所有检查，执行写入！
+    await prisma.enrollment.create({
+      data: { 
+        userId: studentId,
+        courseCode: courseCode,
+        sectionId: targetSection.id,
+        semester: activeSemester,
+        status: 'PENDING_PA'
+      }
+    });
+
+    logger.info(`[Manual Action] Student ${studentId} manually registered for ${courseCode} Sec ${sectionNumber}.`);
+    
+    res.status(200).json({ 
+      success: true, 
+      message: `✅ Registration successful! ${courseCode} (Sec ${sectionNumber}) has been added to your timetable.` 
+    });
+
+  } catch (error) {
+    logger.error("Error in manual registration:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
