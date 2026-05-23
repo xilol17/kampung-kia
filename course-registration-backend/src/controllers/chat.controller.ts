@@ -262,8 +262,13 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
       (
         lowerMessage.includes("drop course") ||
         lowerMessage.includes("drop a course") ||
+        lowerMessage.includes("drop subject") ||
+        lowerMessage.includes("drop a subject") ||
         lowerMessage.includes("remove course") ||
-        lowerMessage.includes("cancel course")
+        lowerMessage.includes("remove subject") ||
+        lowerMessage.includes("cancel course") ||
+        lowerMessage.includes("cancel subject") ||
+        lowerMessage.includes("drop")
       )
     ) {
       needTimetable = true;
@@ -318,14 +323,24 @@ export const handleChat = async (req: AuthRequest, res: Response): Promise<void>
           needTimetable = true;
           break;
 
-        case 'SEARCH_COURSE':
+case 'SEARCH_COURSE':
           for (const cleanCode of codesToProcess) {
             const res = await searchCourseAction(cleanCode, activeSemester);
             executionFeedback += `\n\n🔍 查课 ${cleanCode} 结果：\n${res.message}`;
-            structuredDataPayload.searchResults = res.data;
-
+            
+            // 🌟 完美运行的核心：安全地把数据拼接入数组
             if (res.success && res.data) {
-              structuredDataPayload.searchResults = res.data;
+              // 如果 payload 里还没有这个数组，先初始化它
+              if (!structuredDataPayload.searchResults) {
+                structuredDataPayload.searchResults = [];
+              }
+              
+              // 确保不管后台吐出的是数组还是单个对象，都能安全地推进大数组里
+              if (Array.isArray(res.data)) {
+                structuredDataPayload.searchResults.push(...res.data);
+              } else {
+                structuredDataPayload.searchResults.push(res.data);
+              }
             }
           }
           break;

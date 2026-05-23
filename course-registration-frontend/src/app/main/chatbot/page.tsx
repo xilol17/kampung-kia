@@ -149,12 +149,13 @@ export default function ChatbotPage() {
 
   // =================================================================
   // 📡 CHANNEL A: 加选与智能排产核心处理器 (/register API)
+  // 🌟 FIX: Added targetSection parameter with default "01"
   // =================================================================
-  const handleExecuteEnrollPipeline = async (courseCode: string) => {
+  const handleExecuteEnrollPipeline = async (courseCode: string, targetSection: string = "01") => {
     if (isProcessing) return;
     setIsProcessing(true);
 
-    const toastId = toast.loading(`Routing network payload vectors for ${courseCode}...`, {
+    const toastId = toast.loading(`Routing network payload vectors for ${courseCode} (Sec ${targetSection})...`, {
       style: { background: '#0f172a', color: '#a78bfa', border: '1px solid #8b5cf6' }
     });
 
@@ -172,7 +173,7 @@ export default function ChatbotPage() {
           "Content-Type": "application/json",
           ...(token ? { "Authorization": `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ courseCode, sectionNumber: "01" }), 
+        body: JSON.stringify({ courseCode, sectionNumber: targetSection }), // 🌟 FIX: Now uses dynamic section
       });
 
       const data = await response.json();
@@ -185,7 +186,7 @@ export default function ChatbotPage() {
           {
             id: crypto.randomUUID(),
             sender: "ai",
-            text: `✅ **AI System Sync:** Connection established! Module node **${courseCode}** (Section 01) has been injected into your registry workspace database. The core load metrics scales have been recalculated.`,
+            text: `✅ **AI System Sync:** Connection established! Module node **${courseCode}** (Section ${targetSection}) has been injected into your registry workspace database. The core load metrics scales have been recalculated.`,
           },
         ]);
       } else {
@@ -208,7 +209,7 @@ export default function ChatbotPage() {
   };
 
   // =================================================================
-  // 🗑️ 核心修改点 CHANNEL B: 真实对接表格行内一键快速退选处理器 (/drop API)
+  // 🗑️ CHANNEL B: 真实对接表格行内一键快速退选处理器 (/drop API)
   // =================================================================
   const handleDropCourseDirectly = async (courseCode: string) => {
     if (isProcessing) return;
@@ -264,7 +265,7 @@ export default function ChatbotPage() {
   };
 
   // =================================================================
-  // 🚀 ATOMIC MESSAGING PIPELINE NETWORK CONTROLLER (100% REAL API)
+  // 🚀 ATOMIC MESSAGING PIPELINE NETWORK CONTROLLER
   // =================================================================
   const executeChatRequestPipeline = async (userText: string) => {
     if (!userText.trim() || isProcessing) return;
@@ -372,51 +373,65 @@ export default function ChatbotPage() {
                       <div className="space-y-4 pt-3 border-t border-slate-200/60 dark:border-slate-800/60 transition-all">
                         
                         {/* RENDERER 1: Modern Course Section List Search Card */}
-{msg.structuredData.searchResults && msg.structuredData.searchResults.length > 0 && (
-  <div className="w-full space-y-3 animate-fade-in">
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-      {msg.structuredData.searchResults.map((course, idx) => (
-        <div key={idx} className="group relative bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm hover:border-cyan-500 transition-all">
-          <div className="flex justify-between items-start mb-3">
-            <div>
-              <span className="font-mono text-[9px] font-black bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-400 px-2 py-0.5 rounded-full">
-                {course.courseCode}
-              </span>
-              <h4 className="text-[12px] font-bold text-slate-800 dark:text-white mt-1.5 leading-tight">
-                {course.courseName}
-              </h4>
-            </div>
-            <span className="text-[10px] font-bold text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md">
-              {course.creditHours} CR
-            </span>
-          </div>
+                        {msg.structuredData.searchResults && msg.structuredData.searchResults.length > 0 && (
+                          <div className="w-full space-y-3 animate-fade-in">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              
+                              {/* 🌟 核心修复：使用 flatMap 将嵌套的 sections 数组拍平成一张张独立的卡片 */}
+                              {msg.structuredData.searchResults.flatMap((course: any, cIdx: number) => 
+                                // 兼容防御：如果后端传的直接是平铺对象就包成数组，如果是 sections 数组就遍历它
+                                (course.sections || [course]).map((sec: any, sIdx: number) => (
+                                  <div key={`${cIdx}-${sIdx}`} className="group relative bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm hover:border-cyan-500 transition-all">
+                                    
+                                    <div className="flex justify-between items-start mb-3">
+                                      <div>
+                                        <span className="font-mono text-[9px] font-black bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-400 px-2 py-0.5 rounded-full">
+                                          {course.courseCode}
+                                        </span>
+                                        <h4 className="text-[12px] font-bold text-slate-800 dark:text-white mt-1.5 leading-tight">
+                                          {course.courseName}
+                                        </h4>
+                                      </div>
+                                      <span className="text-[10px] font-bold text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md">
+                                        {course.creditHours || 3} Credit Hours
+                                      </span>
+                                    </div>
 
-          <div className="space-y-1.5 text-[10px] text-slate-500 dark:text-slate-400 mb-4">
-            <p className="flex items-center gap-1.5">
-              <Icon name="userGroup" /> Sec {course.sectionNumber}
-            </p>
-            {/* 🌟 动态解析 timeSlots */}
-            <p className="flex items-center gap-1.5 font-mono">
-              <Icon name="calendar" /> {course.timeSlots.map(ts => 
-                `${getDayName(ts.dayOfWeek)} ${formatTime(ts.startTime)}-${formatTime(ts.endTime)}`
-              ).join(", ")}
-            </p>
-            <p className="flex items-center gap-1.5 font-mono">
-              <Icon name="structure" /> Venue: {course.venue}
-            </p>
-          </div>
+                                    <div className="space-y-1.5 text-[10px] text-slate-500 dark:text-slate-400 mb-4">
+                                      <p className="flex items-center gap-1.5">
+                                        <Icon name="userGroup" /> Sec {sec.sectionNumber || "TBA"}
+                                      </p>
+                                      
+                                      <p className="flex items-center gap-1.5 font-mono">
+                                        <Icon name="calendar" /> {sec.timeSlots && sec.timeSlots.length > 0 ? sec.timeSlots.map((ts: any) => 
+                                          `${getDayName(ts.dayOfWeek)} ${formatTime(ts.startTime)}-${formatTime(ts.endTime)}`
+                                        ).join(", ") : "Time: TBA"}
+                                      </p>
+                                      
+                                      <p className="flex items-center gap-1.5 font-mono">
+                                        <Icon name="structure" /> Venue: {sec.venue || "TBA"}
+                                      </p>
 
-          <button
-            onClick={() => handleExecuteEnrollPipeline(course.courseCode)}
-            className="w-full py-2 bg-slate-900 dark:bg-cyan-600 hover:bg-cyan-700 text-white text-[10px] font-black uppercase tracking-widest rounded-lg transition-all active:scale-95"
-          >
-            Enroll Section {course.sectionNumber}
-          </button>
-        </div>
-      ))}
-    </div>
-  </div>
-)}
+                                      {/* 🌟 核心新增：显示 Capacity */}
+                                      <p className="flex items-center gap-1.5 font-mono">
+                                        <Icon name="check" /> Capacity: <span className="font-bold text-cyan-600 dark:text-cyan-400">{sec.capacity !== undefined ? sec.capacity : "N/A"}</span>
+                                      </p>
+                                    </div>
+
+                                    {/* 🌟 修复：绑定正确的 courseCode 和 sec.sectionNumber */}
+                                    <button
+                                      onClick={() => handleExecuteEnrollPipeline(course.courseCode, sec.sectionNumber)}
+                                      className="w-full py-2 bg-slate-900 dark:bg-cyan-600 hover:bg-cyan-700 text-white text-[10px] font-black uppercase tracking-widest rounded-lg transition-all active:scale-95"
+                                    >
+                                      Enroll Section {sec.sectionNumber || "TBA"}
+                                    </button>
+                                  </div>
+                                ))
+                              )}
+
+                            </div>
+                          </div>
+                        )}
 
                         {/* RENDERER 2: Credit/Progress Data Dashboard */}
                         {msg.structuredData.progressReport && (
@@ -502,7 +517,7 @@ export default function ChatbotPage() {
                           </div>
                         )}
 
-                        {/* 🌟 RENDERER 3: TIMETABLE GENERATOR PREVIEW MATRIX (退选按钮已优雅地内嵌到每一行末尾) */}
+                        {/* RENDERER 3: TIMETABLE GENERATOR PREVIEW MATRIX */}
                         {msg.structuredData.currentTimetable && (
                           <div className="space-y-2">
                             <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Active Schedule Preview</h4>
@@ -524,13 +539,17 @@ export default function ChatbotPage() {
                                       <td className="p-2.5 truncate max-w-[180px] font-bold">{course.courseName}</td>
                                       <td className="p-2.5 text-center font-mono text-slate-400">{course.sectionNumber}</td>
                                       <td className="p-2.5 text-[10px]">
-                                        {course.timeSlots.map((ts, tIdx) => (
+                                        <td className="p-2.5 text-[10px]">
+                                        {/* 🌟 核心修复：加上 ?. 保护 */}
+                                        {course.timeSlots?.length > 0 ? course.timeSlots.map((ts, tIdx) => (
                                           <div key={tIdx} className="leading-tight text-slate-500">
-                                            🗓️ {getDayName(ts.dayOfWeek)} • {formatTime(ts.startTime)} - {formatTime(ts.endTime)} <span className="text-slate-400 dark:text-slate-600 font-mono">({course.venue})</span>
+                                            🗓️ {getDayName(ts.dayOfWeek)} • {formatTime(ts.startTime)} - {formatTime(ts.endTime)} <span className="text-slate-400 dark:text-slate-600 font-mono">({course.venue || "TBA"})</span>
                                           </div>
-                                        ))}
+                                        )) : (
+                                          <div className="text-slate-400 italic">TBA</div>
+                                        )}
                                       </td>
-                                      {/* 🌟 核心改进点：在每一行的末尾，渲染极简现代的高颜值行内退选按钮 */}
+                                      </td>
                                       <td className="p-2.5 text-center">
                                         <button
                                           type="button"
@@ -597,50 +616,6 @@ export default function ChatbotPage() {
                                   </div>
                                 </div>
                               )}
-                              {msg.structuredData.searchResults && msg.structuredData.searchResults.length > 0 && (
-                                <div className="w-full space-y-3 animate-fade-in">
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                    {msg.structuredData.searchResults.map((course, idx) => (
-                                      <div key={idx} className="group relative bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm hover:border-cyan-500 transition-all">
-                                        <div className="flex justify-between items-start mb-3">
-                                          <div>
-                                            <span className="font-mono text-[9px] font-black bg-cyan-100 dark:bg-cyan-900/40 text-cyan-700 dark:text-cyan-400 px-2 py-0.5 rounded-full">
-                                              {course.courseCode}
-                                            </span>
-                                            <h4 className="text-[12px] font-bold text-slate-800 dark:text-white mt-1.5 leading-tight">
-                                              {course.courseName}
-                                            </h4>
-                                          </div>
-                                          <span className="text-[10px] font-bold text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-md">
-                                            {course.creditHours} CR
-                                          </span>
-                                        </div>
-
-                                      <div className="space-y-1.5 text-[10px] text-slate-500 dark:text-slate-400 mb-4">
-                                        <p className="flex items-center gap-1.5">
-                                          <Icon name="userGroup" /> Sec {course.sectionNumber}
-                                        </p>
-                                        <p className="flex items-center gap-1.5 font-mono">
-                                          <Icon name="calendar" /> {course.timeSlots.map(ts => 
-                                            `${getDayName(ts.dayOfWeek)} ${formatTime(ts.startTime)}-${formatTime(ts.endTime)}`
-                                          ).join(", ")}
-                                        </p>
-                                        <p className="flex items-center gap-1.5 font-mono">
-                                          <Icon name="structure" /> Venue: {course.venue}
-                                        </p>
-                                      </div>
-
-                                      <button
-                                        onClick={() => handleExecuteEnrollPipeline(course.courseCode)}
-                                        className="w-full py-2 bg-slate-900 dark:bg-cyan-600 hover:bg-cyan-700 text-white text-[10px] font-black uppercase tracking-widest rounded-lg transition-all active:scale-95"
-                                      >
-                                        Enroll Stream
-                                      </button>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
                               
                             </div>
                           </div>
