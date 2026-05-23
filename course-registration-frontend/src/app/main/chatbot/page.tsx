@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, Suspense } from "react"; // 🌟 引入 Suspense 边界组件
 import { useSearchParams, useRouter } from "next/navigation";
 import toast, { Toaster } from "react-hot-toast";
 
@@ -29,7 +29,7 @@ const Icon = ({ name }: { name: string }) => {
 };
 
 interface TimeSlot {
-  dayOfWeek: number; // 1 = Mon, 2 = Tue, 3 = Wed, 4 = Thu, 5 = Fri
+  dayOfWeek: number;
   startTime: number;
   endTime: number;
 }
@@ -115,7 +115,8 @@ interface ChatMessage {
   structuredData?: ApiResponse;
 }
 
-export default function ChatbotPage() {
+// 🌟 将页面核心拆分为内部渲染组件，确保 searchParams 的消费处在 Suspense 上下文中
+function ChatbotInnerContent() {
   const [inputQuery, setInputQuery] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -160,9 +161,6 @@ export default function ChatbotPage() {
     alert(`⚡ Core override triggered: Directing manual registry pipeline to link ${code} (Section ${sec}).`);
   };
 
-  // =================================================================
-  // 📡 CHANNEL A: 加选与智能排产核心处理器 (/register API)
-  // =================================================================
   const handleExecuteEnrollPipeline = async (courseCode: string) => {
     if (isProcessing) return;
     setIsProcessing(true);
@@ -220,9 +218,6 @@ export default function ChatbotPage() {
     await handleExecuteEnrollPipeline(courseCode);
   };
 
-  // =================================================================
-  // 🗑️ CHANNEL B: 真实对接表格行内一键快速退选处理器 (/drop API)
-  // =================================================================
   const handleDropCourseDirectly = async (courseCode: string) => {
     if (isProcessing) return;
     setIsProcessing(true);
@@ -276,9 +271,6 @@ export default function ChatbotPage() {
     }
   };
 
-  // =================================================================
-  // 🚀 ATOMIC MESSAGING PIPELINE NETWORK CONTROLLER (100% REAL API)
-  // =================================================================
   const executeChatRequestPipeline = async (userText: string) => {
     if (!userText.trim() || isProcessing) return;
 
@@ -400,20 +392,21 @@ export default function ChatbotPage() {
                     {msg.structuredData && (
                       <div className="space-y-4 pt-3 border-t border-slate-200/60 dark:border-slate-800/60 transition-all">
                         
-                        {/* RENDERER 0: 先修课程卡片 (已加入一键加选选课按钮) */}
+                        {/* RENDERER 0: 先修课程卡片 */}
                         {msg.structuredData.prerequisiteInfo && (
                           <div className="w-full max-w-xl rounded-xl border border-slate-200 bg-white p-4 dark:bg-slate-950 dark:border-slate-800/80 shadow-md animate-fade-in space-y-3">
                             <div className="flex items-center justify-between border-b pb-2 border-slate-100 dark:border-slate-900">
                               <div className="flex items-center gap-2">
                                 <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
                                 <h4 className="text-xs font-black text-slate-900 dark:text-white uppercase font-mono tracking-tight">
-                                  Prerequisite Course
+                                  Prerequisite Telemetry Matrix
                                 </h4>
                               </div>
-                              
+                              <span className="text-[9px] font-mono font-black text-slate-400 bg-slate-50 dark:bg-slate-900 px-1.5 py-0.2 rounded border">
+                                LINK LOCK
+                              </span>
                             </div>
 
-                            {/* 目标核心科目 */}
                             <div className="p-3 bg-slate-50/70 border border-slate-100 rounded-xl dark:bg-slate-900/40 dark:border-slate-800 flex items-center justify-between">
                               <div className="min-w-0">
                                 <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 font-mono">Target Subject</span>
@@ -426,9 +419,10 @@ export default function ChatbotPage() {
                               </span>
                             </div>
 
-                            {/* 关联先修课程列表网格 */}
                             <div className="space-y-1.5">
-                              
+                              <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 font-mono block pl-1">
+                                🔑 Required Unlocked Nodes
+                              </span>
                               
                               {msg.structuredData.prerequisiteInfo.hasPrerequisites && msg.structuredData.prerequisiteInfo.prerequisites?.length > 0 ? (
                                 msg.structuredData.prerequisiteInfo.prerequisites.map((pre, pIdx) => (
@@ -444,7 +438,6 @@ export default function ChatbotPage() {
                                       </div>
                                       <p className="text-[9.5px] text-slate-400 font-medium mt-1">Must lock a passing grade record block before terminal core entry.</p>
                                     </div>
-                                    {/* 🌟 核心增补点：点击直接将先修科目发送加选接口请求 */}
                                     <button
                                       type="button"
                                       disabled={isProcessing}
@@ -514,7 +507,7 @@ export default function ChatbotPage() {
                           </div>
                         )}
 
-                        {/* RENDERER 2: Credit/Progress Data Dashboard (Occupies full row length) */}
+                        {/* RENDERER 2: Credit/Progress Data Dashboard */}
                         {msg.structuredData.progressReport && (
                           <div className="w-full rounded-2xl border border-slate-200/70 bg-white p-6 space-y-6 dark:bg-slate-950 dark:border-slate-800 shadow-md animate-fade-in">
                             
@@ -598,7 +591,7 @@ export default function ChatbotPage() {
                           </div>
                         )}
 
-                        {/* RENDERER 3: TIMETABLE GENERATOR PREVIEW MATRIX (Inline drop buttons enabled) */}
+                        {/* RENDERER 3: TIMETABLE GENERATOR PREVIEW MATRIX */}
                         {msg.structuredData.currentTimetable && (
                           <div className="space-y-2">
                             <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Active Schedule Preview</h4>
@@ -753,7 +746,7 @@ export default function ChatbotPage() {
 
           {isProcessing && (
             <div className="flex w-full justify-start animate-pulse">
-              <div className="max-w-[75%] rounded-2xl rounded-tl-none p-3.5 text-xs font-bold font-mono tracking-wider bg-slate-50 border border-slate-200 text-slate-400 dark:bg-slate-900/30 dark:border-slate-800">
+              <div className="max-w-[75%] rounded-2xl rounded-tl-none p-3.5 text-xs font-bold font-mono tracking-wider bg-slate-50 border border-slate-200 text-slate-400 dark:bg-slate-900 dark:border-slate-800">
                 AI processing parameters<span className="animate-ping">...</span>
               </div>
             </div>
@@ -788,5 +781,18 @@ export default function ChatbotPage() {
 
       </div>
     </div>
+  );
+}
+
+// 🌟 核心修复外壳：通过唯一的生产默认导出加载 Suspense 异步边界，阻断预渲染报错
+export default function ChatbotPage() {
+  return (
+    <Suspense fallback={
+      <div className="w-full h-full flex items-center justify-center font-mono text-xs text-slate-400 uppercase animate-pulse">
+        Streaming system routing modules...
+      </div>
+    }>
+      <ChatbotInnerContent />
+    </Suspense>
   );
 }
