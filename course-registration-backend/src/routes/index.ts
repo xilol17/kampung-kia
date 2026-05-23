@@ -21,5 +21,6 @@ router.get('/portal/courses/search', verifyToken, searchCoursesApi);
 router.get('/portal/dashboard-intel', verifyToken, getDashboardIntel);
 
 router.post('/portal/register', verifyToken, manualRegisterApi);
+router.post('/course/drop', verifyToken, manualDropApi);
 
 export default router;

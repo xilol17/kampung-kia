@@ -425,3 +425,67 @@ console.log("After register:", currentTotalCredits + newCredit);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+export const manualDropApi = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const studentId = req.user.userId;
+    const { courseCode } = req.body;
+
+    if (!courseCode) {
+      res.status(400).json({
+        success: false,
+        message: "Missing courseCode"
+      });
+      return;
+    }
+
+    const settings = await prisma.systemSetting.findFirst();
+    const activeSemester = settings?.activeSemester || "2526-SEM1";
+
+    const enrollment = await prisma.enrollment.findFirst({
+      where: {
+        userId: studentId,
+        semester: activeSemester,
+        section: {
+          courseCode: courseCode
+        },
+        status: {
+          in: ["PENDING_PA", "APPROVED"]
+        }
+      },
+      include: {
+        section: {
+          include: {
+            course: true
+          }
+        }
+      }
+    });
+
+    if (!enrollment) {
+      res.status(404).json({
+        success: false,
+        message: `You are not currently registered for ${courseCode}.`
+      });
+      return;
+    }
+
+    await prisma.enrollment.delete({
+      where: {
+        id: enrollment.id
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Dropped ${courseCode} successfully.`
+    });
+
+  } catch (error) {
+    logger.error("Error in manual drop:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error"
+    });
+  }
+};

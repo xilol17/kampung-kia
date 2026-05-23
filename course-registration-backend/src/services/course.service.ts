@@ -499,121 +499,305 @@ export const searchCourseAction = async (courseCode: string, semester: string) =
 export const recommendPlanAction = async (userId: string, semester: string) => {
   logger.info(`[Action] Generating course recommendations for Student ${userId} in ${semester}`);
 
-  // 1. 抓取学生的“前世今生”（所有修课记录）
+  const MAX_CREDIT = 19;
+
+  // 1. Get student info
+  const student = await prisma.user.findUnique({
+    where: { id: userId }
+  });
+
+  if (!student) {
+    return {
+      success: false,
+      message: "Student not found.",
+      data: null
+    };
+  }
+
+  const studentProgram = student.program || "BCS";
+  const studentCurrentSem = student.currentSem || 1;
+
+  // Convert currentSem to catalog year + semester
+  // currentSem 1 = Year 1 Sem 1
+  // currentSem 2 = Year 1 Sem 2
+  // currentSem 3 = Year 2 Sem 1
+  const targetYear = Math.ceil(studentCurrentSem / 2);
+  const targetSemester = studentCurrentSem % 2 === 0 ? 2 : 1;
+
+  // 2. Get all enrollment history
   const history = await prisma.enrollment.findMany({
-    where: { userId: userId },
-    include: { section: { include: { course: true } } }
-  });
-
-  // 分类历史记录
-  const passedCodes = new Set(history.filter(e => e.status === 'PASSED').map(e => e.section.courseCode));
-  const currentCodes = new Set(history.filter(e => e.semester === semester && ['PENDING_PA', 'APPROVED'].includes(e.status)).map(e => e.section.courseCode));
-  const failedCodes = new Set(history.filter(e => e.status === 'FAILED').map(e => e.section.courseCode));
-  
-  // 找出那些挂了科，且至今没重修及格，且这学期还没选的“待重修科目”
-  const activeFailedCodes = [...failedCodes].filter(code => !passedCodes.has(code) && !currentCodes.has(code));
-
-  // 2. 抓取本学期所有的开班信息，并去重提取出“开了哪些课”
-  const availableSections = await prisma.section.findMany({
-    where: { semester: semester },
-    include: { course: true }
-  });
-  
-  const availableCoursesMap = new Map();
-  availableSections.forEach(sec => {
-    if (!availableCoursesMap.has(sec.courseCode)) {
-      availableCoursesMap.set(sec.courseCode, sec.course);
+    where: { userId },
+    include: {
+      section: {
+        include: {
+          course: true
+        }
+      },
+      course: true
     }
   });
-  const availableCourses = Array.from(availableCoursesMap.values());
 
-  // 3. 查出这些开班科目的所有“前置条件 (Prerequisites)”
-  const prerequisites = await prisma.prerequisite.findMany({
-    where: { courseCode: { in: Array.from(availableCoursesMap.keys()) } }
+  const passedCodes = new Set(
+    history
+      .filter(e => e.status === "PASSED")
+      .map(e => e.courseCode || e.section.courseCode)
+  );
+
+  const currentCodes = new Set(
+    history
+      .filter(e =>
+        e.semester === semester &&
+        ["PENDING_PA", "APPROVED"].includes(e.status)
+      )
+      .map(e => e.courseCode || e.section.courseCode)
+  );
+
+  const failedCodes = new Set(
+    history
+      .filter(e => e.status === "FAILED")
+      .map(e => e.courseCode || e.section.courseCode)
+  );
+
+  const activeFailedCodes = [...failedCodes].filter(
+    code => !passedCodes.has(code) && !currentCodes.has(code)
+  );
+
+  // 3. Calculate current semester credits correctly
+  const currentSemesterCredits = history
+    .filter(e =>
+      e.semester === semester &&
+      ["PENDING_PA", "APPROVED"].includes(e.status)
+    )
+    .reduce((sum, e) => {
+      return sum + (e.course?.creditHours ?? e.section.course.creditHours ?? 0);
+    }, 0);
+
+  let availableCredits = MAX_CREDIT - currentSemesterCredits;
+
+  // If already full, still return useful info
+  if (availableCredits <= 0) {
+    return {
+      success: true,
+      message: "Credit limit already reached.",
+      data: {
+        studentCurrentSem,
+        targetYear,
+        targetSemester,
+
+        currentTakenCredits: currentSemesterCredits,
+        maxCredits: MAX_CREDIT,
+        remainingCredits: 0,
+
+        isCreditFull: true,
+
+        creditMessage:
+          `You already have ${currentSemesterCredits}/${MAX_CREDIT} credit hours. ` +
+          `No additional courses can be recommended unless you drop some courses.`,
+
+        recommendedNewCredits: 0,
+        totalProjectedCredits: currentSemesterCredits,
+
+        mustRetake: [],
+        canTake: [],
+
+        reason: "CREDIT_LIMIT_REACHED"
+      }
+    };
+  }
+
+  // 4. Get catalog courses:
+  // Recommend:
+  // - current semester catalog courses
+  // - previous catalog courses not passed yet
+  const catalogItems = await prisma.catalogItem.findMany({
+    where: {
+      programCode: studentProgram,
+      OR: [
+        {
+          year: targetYear,
+          semester: targetSemester
+        },
+        {
+          year: {
+            lt: targetYear
+          }
+        },
+        {
+          year: targetYear,
+          semester: {
+            lt: targetSemester
+          }
+        }
+      ]
+    },
+    include: {
+      course: true
+    },
+    orderBy: [
+      { year: "asc" },
+      { semester: "asc" },
+      { courseCode: "asc" }
+    ]
   });
-  
-  const preReqMap = new Map<string, string[]>();
-  prerequisites.forEach(p => {
-    if (!preReqMap.has(p.courseCode)) preReqMap.set(p.courseCode, []);
-    preReqMap.get(p.courseCode)!.push(p.prerequisiteCode);
-  });
 
-  // 4. 🧠 核心算法：循环判断，分类推荐
-  const qualifiedCourses = { mustRetake: [] as any[], canTake: [] as any[] };
-
-  for (const course of availableCourses) {
-    const code = course.courseCode;
-
-    // 剔除：已经及格了，或者这学期已经选了的课
-    if (passedCodes.has(code) || currentCodes.has(code)) continue;
-
-    // 查杀：是否有资格上这门课？(先修课必须全过)
-    const reqs = preReqMap.get(code) || [];
-    const meetsAllReqs = reqs.every(req => passedCodes.has(req));
-
-    if (meetsAllReqs) {
-      if (activeFailedCodes.includes(code)) {
-        qualifiedCourses.mustRetake.push(course); 
-      } else {
-        qualifiedCourses.canTake.push(course); 
+  // 5. Only recommend courses that have sections this semester
+  const availableSections = await prisma.section.findMany({
+    where: { semester },
+    include: {
+      course: true,
+      enrollments: {
+        where: {
+          status: {
+            in: ["PENDING_PA", "APPROVED"]
+          }
+        }
       }
     }
-  }
-
-  // ==========================================
-  // 5. 🎒 智能背包算法：卡着 19 学分上限排兵布阵
-  // ==========================================
-  // 算出学生这学期已经占用了多少学分
-  const currentSemesterCredits = Array.from(currentCodes).reduce((sum, code) => {
-    const course = availableCoursesMap.get(code);
-    return sum + (course?.credit || 3);
-  }, 0);
-
-  let availableCredits = 19 - currentSemesterCredits; // 还剩多少学分额度？
-  const finalPlan = { mustRetake: [] as any[], canTake: [] as any[] };
-  let plannedCredits = 0;
-
-  // 第一优先级：拼命塞入“挂科重修”
-  for (const c of qualifiedCourses.mustRetake) {
-    const credit = c.credit || 3;
-    if (availableCredits >= credit) {
-      finalPlan.mustRetake.push(c);
-      availableCredits -= credit;
-      plannedCredits += credit;
-    }
-  }
-
-  // 第二优先级：用正常新课填满剩余学分 (可以按某种逻辑排序，这里默认按顺序塞)
-  for (const c of qualifiedCourses.canTake) {
-    const credit = c.credit || 3;
-    if (availableCredits >= credit) {
-      finalPlan.canTake.push(c);
-      availableCredits -= credit;
-      plannedCredits += credit;
-    }
-  }
-
-  // ==========================================
-  // 6. 组装极简的格式化数据供前端 Pikka 渲染
-  // ==========================================
-  const formatCourse = (c: any) => ({
-    courseCode: c.courseCode,
-    courseName: c.courseName,
-    credit: c.credit || 3
   });
 
-  const structuredData = {
-    currentTakenCredits: currentSemesterCredits,        // 本学期已选学分
-    recommendedNewCredits: plannedCredits,              // 本次推荐新增学分
-    totalProjectedCredits: currentSemesterCredits + plannedCredits, // 采纳建议后的总学分 (一定 <= 19)
-    mustRetake: finalPlan.mustRetake.map(formatCourse), // 真正推荐你这学期补的重修课
-    canTake: finalPlan.canTake.map(formatCourse)        // 真正推荐你这学期上的新课
+  const availableCourseMap = new Map<string, any>();
+
+  for (const section of availableSections) {
+    const isNotFull = section.enrollments.length < section.capacity;
+
+    if (isNotFull && !availableCourseMap.has(section.courseCode)) {
+      availableCourseMap.set(section.courseCode, section.course);
+    }
+  }
+
+  // 6. Get prerequisites
+  const candidateCodes = catalogItems.map(item => item.courseCode);
+
+  const prerequisites = await prisma.prerequisite.findMany({
+    where: {
+      courseCode: {
+        in: candidateCodes
+      }
+    },
+    include: {
+      prerequisiteCourse: true
+    }
+  });
+
+  const preReqMap = new Map<string, string[]>();
+
+  for (const pre of prerequisites) {
+    if (!preReqMap.has(pre.courseCode)) {
+      preReqMap.set(pre.courseCode, []);
+    }
+
+    preReqMap.get(pre.courseCode)!.push(pre.prerequisiteCode);
+  }
+
+  // 7. Build qualified courses
+  const mustRetakeCandidates: any[] = [];
+  const canTakeCandidates: any[] = [];
+  const blockedByPrerequisite: any[] = [];
+  const notOfferedThisSemester: any[] = [];
+
+  for (const item of catalogItems) {
+    const course = item.course;
+    const code = course.courseCode;
+
+    // Already passed or currently taking
+    if (passedCodes.has(code) || currentCodes.has(code)) {
+      continue;
+    }
+
+    // No available section this semester
+    if (!availableCourseMap.has(code)) {
+      notOfferedThisSemester.push({
+        courseCode: code,
+        courseName: course.courseName,
+        creditHours: course.creditHours,
+        year: item.year,
+        semester: item.semester
+      });
+      continue;
+    }
+
+    const reqs = preReqMap.get(code) || [];
+    const missingPrerequisites = reqs.filter(req => !passedCodes.has(req));
+
+    if (missingPrerequisites.length > 0) {
+      blockedByPrerequisite.push({
+        courseCode: code,
+        courseName: course.courseName,
+        creditHours: course.creditHours,
+        missingPrerequisites
+      });
+      continue;
+    }
+
+    const formattedCourse = {
+      courseCode: code,
+      courseName: course.courseName,
+      creditHours: course.creditHours,
+      year: item.year,
+      semester: item.semester,
+      courseType: item.courseType
+    };
+
+    if (activeFailedCodes.includes(code)) {
+      mustRetakeCandidates.push(formattedCourse);
+    } else {
+      canTakeCandidates.push(formattedCourse);
+    }
+  }
+
+  // 8. Fill recommendation within credit limit
+  const finalPlan = {
+    mustRetake: [] as any[],
+    canTake: [] as any[]
   };
 
-  return { 
-    success: true, 
-    message: "完美学分推荐方案已生成", 
-    data: structuredData 
+  let plannedCredits = 0;
+
+  for (const course of mustRetakeCandidates) {
+    const credit = course.creditHours ?? 0;
+
+    if (availableCredits >= credit) {
+      finalPlan.mustRetake.push(course);
+      availableCredits -= credit;
+      plannedCredits += credit;
+    }
+  }
+
+  for (const course of canTakeCandidates) {
+    const credit = course.creditHours ?? 0;
+
+    if (availableCredits >= credit) {
+      finalPlan.canTake.push(course);
+      availableCredits -= credit;
+      plannedCredits += credit;
+    }
+  }
+
+  const structuredData = {
+    studentCurrentSem,
+    targetYear,
+    targetSemester,
+
+    currentTakenCredits: currentSemesterCredits,
+    maxCredits: MAX_CREDIT,
+    availableCredits: MAX_CREDIT - currentSemesterCredits,
+
+    recommendedNewCredits: plannedCredits,
+    totalProjectedCredits: currentSemesterCredits + plannedCredits,
+
+    mustRetake: finalPlan.mustRetake,
+    canTake: finalPlan.canTake,
+
+    skipped: {
+      blockedByPrerequisite,
+      notOfferedThisSemester
+    }
+  };
+
+  return {
+    success: true,
+    message: "Course recommendation plan generated successfully.",
+    data: structuredData
   };
 };
 
