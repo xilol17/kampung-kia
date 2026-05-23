@@ -36,7 +36,7 @@ export default function LoginPage() {
 
         document.cookie = `token=${data.token}${expires}; path=/; SameSite=Strict;`;
         localStorage.setItem("user_metadata", JSON.stringify(data.user));
-        router.push("/dashboard");
+        router.push("/main/dashboard");
       } else {
         alert(data.message || "Invalid id or password.");
       }
