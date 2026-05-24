@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, Suspense } from "react"; // 🌟 引入 Suspense 边界组件
+import { useState, useRef, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import toast, { Toaster } from "react-hot-toast";
 
@@ -115,7 +115,6 @@ interface ChatMessage {
   structuredData?: ApiResponse;
 }
 
-// 🌟 将页面核心拆分为内部渲染组件，确保 searchParams 的消费处在 Suspense 上下文中
 function ChatbotInnerContent() {
   const [inputQuery, setInputQuery] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -613,7 +612,8 @@ function ChatbotInnerContent() {
                                       <td className="p-2.5 truncate max-w-[180px] font-bold">{course.courseName}</td>
                                       <td className="p-2.5 text-center font-mono text-slate-400">{course.sectionNumber}</td>
                                       <td className="p-2.5 text-[10px]">
-                                        {course.timeSlots.map((ts, tIdx) => (
+                                        {/* 🌟 安全加固防御：对 timeSlots 使用可选链检查，规避未排课产生的 crash */}
+                                        {course.timeSlots?.map((ts, tIdx) => (
                                           <div key={tIdx} className="leading-tight text-slate-500">
                                             🗓️ {getDayName(ts.dayOfWeek)} • {formatTime(ts.startTime)} - {formatTime(ts.endTime)} <span className="text-slate-400 dark:text-slate-600 font-mono">({course.venue})</span>
                                           </div>
@@ -713,10 +713,15 @@ function ChatbotInnerContent() {
                                     <p className="flex items-center gap-1.5">
                                       <Icon name="userGroup" /> Sec {course.sectionNumber}
                                     </p>
+                                    {/* 🌟 核心防空修复：使用可选链 course.timeSlots?.map 确保 timeSlots 缺失时静默渲染防死锁 */}
                                     <p className="flex items-center gap-1.5 font-mono">
-                                      <Icon name="calendar" /> {course.timeSlots.map(ts => 
-                                        `${getDayName(ts.dayOfWeek)} ${formatTime(ts.startTime)}-${formatTime(ts.endTime)}`
-                                      ).join(", ")}
+                                      <Icon name="calendar" /> {course.timeSlots ? (
+                                        course.timeSlots.map(ts => 
+                                          `${getDayName(ts.dayOfWeek)} ${formatTime(ts.startTime)}-${formatTime(ts.endTime)}`
+                                        ).join(", ")
+                                      ) : (
+                                        <span className="text-slate-400 italic">No time slots assigned</span>
+                                      )}
                                     </p>
                                     <p className="flex items-center gap-1.5 font-mono">
                                       <Icon name="structure" /> Venue: {course.venue}
@@ -746,7 +751,7 @@ function ChatbotInnerContent() {
 
           {isProcessing && (
             <div className="flex w-full justify-start animate-pulse">
-              <div className="max-w-[75%] rounded-2xl rounded-tl-none p-3.5 text-xs font-bold font-mono tracking-wider bg-slate-50 border border-slate-200 text-slate-400 dark:bg-slate-900 dark:border-slate-800">
+              <div className="max-w-[75%] rounded-2xl rounded-tl-none p-3.5 text-xs font-bold font-mono tracking-wider bg-slate-50 border border-slate-200 text-slate-400 dark:bg-slate-900/30 dark:border-slate-800">
                 AI processing parameters<span className="animate-ping">...</span>
               </div>
             </div>
@@ -784,7 +789,6 @@ function ChatbotInnerContent() {
   );
 }
 
-// 🌟 核心修复外壳：通过唯一的生产默认导出加载 Suspense 异步边界，阻断预渲染报错
 export default function ChatbotPage() {
   return (
     <Suspense fallback={
