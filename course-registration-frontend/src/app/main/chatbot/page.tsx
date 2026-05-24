@@ -44,6 +44,11 @@ interface Section {
   lecturerName?: string;
   timeString?: string;
   timeSlots: TimeSlot[];
+  lecturer?: {
+    id?: string;
+    name: string;
+    email?: string;
+  };
 }
 
 interface Course {
@@ -350,7 +355,7 @@ function ChatbotInnerContent() {
           data.courseDetails = {
             courseCode: singleCourse.courseCode,
             courseName: singleCourse.courseName,
-            sections: singleCourse.sections
+            sections: singleCourse.sections || []
           };
           
           if (data.reply.includes("not a recognized") || data.reply.includes("not exist") || data.reply.includes("Searching for")) {
