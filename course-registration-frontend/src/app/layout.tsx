@@ -26,9 +26,14 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-      suppressHydrationWarning={true} // 🌟 加上这一行，允许浏览器插件修改 HTML 属性而不报错
+      suppressHydrationWarning={true} // 保持在这里
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body 
+        className="min-h-full flex flex-col"
+        suppressHydrationWarning={true} // 🌟 关键修改：在这里也加上这一行！
+      >
+        {children}
+      </body>
     </html>
   );
 }

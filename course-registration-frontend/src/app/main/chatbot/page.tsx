@@ -65,13 +65,16 @@ interface ProgressReportData {
   currentCourses: CurrentCourseItem[];
 }
 
+// 🌟 1. 升级接口定义：完美匹配后端真实的嵌套时段与容量字段
 interface ChatCourseSection {
   sectionNumber: string;
   lecturerName: string;
-  timeString: string;
   venue: string;
-  capacityRemaining: number;
-  totalCapacity: number;
+  capacity?: number;
+  totalCapacity?: number;
+  capacityRemaining?: number;
+  timeString?: string;
+  timeSlots?: TimeSlot[]; 
 }
 
 interface PrerequisiteItem {
@@ -135,7 +138,6 @@ function ChatbotInnerContent() {
     if (isExpanded) scrollToBottom();
   }, [messages, isProcessing, isExpanded]);
 
-  // Intercept query inputs from side channels (e.g. Dashboard redirect)
   useEffect(() => {
     const queryFromUrl = searchParams.get("q");
     if (queryFromUrl && queryFromUrl.trim() && !hasFiredRef.current) {
@@ -297,6 +299,39 @@ function ChatbotInnerContent() {
       const data: ApiResponse = await response.json();
 
       if (response.ok) {
+        // =================================================================
+        // 🛡️ FRONTEND DEFENSIVE INTERCEPTOR (完美拦截并强制重写大模型的错误文本)
+        // =================================================================
+        const courseCodeRegex = /[A-Z]{3,4}\d{4}/g;
+        const matchedCodes = userText.toUpperCase().match(courseCodeRegex);
+        const targetCode = matchedCodes && matchedCodes.length > 0 ? matchedCodes[0] : "";
+        
+        if (!data.searchResults && targetCode) {
+          try {
+            const fallbackRes = await fetch(`${baseUrl}/api/portal/courses/search?q=${targetCode}`, {
+              method: "GET",
+              headers: {
+                "Content-Type": "application/json",
+                ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+              },
+            });
+            const fallbackJson = await fallbackRes.json();
+            if (fallbackJson.success && Array.isArray(fallbackJson.data) && fallbackJson.data.length > 0) {
+              data.searchResults = fallbackJson.data;
+            }
+          } catch (e) {
+            console.warn("Fallback network stream bypassed:", e);
+          }
+        }
+
+        if (data.searchResults && data.searchResults.length > 0) {
+          const courseItem = data.searchResults[0];
+          if (data.reply.includes("not a recognized") || data.reply.includes("not exist")) {
+            data.reply = `🤖 **RegiSmart Telemetry Active:** Successfully localized unique node signature for **${courseItem.courseCode}** (${courseItem.courseName}) inside the registry matrix dictionary! Available active terminal sections have been successfully mapped below for your interactive deployment.`;
+          }
+        }
+        // =================================================================
+
         console.log(
           "%c🤖 [CHATBOT ENG TELEMETRY STREAM]", 
           "background: #0ea5e9; color: white; font-weight: black; padding: 4px 10px; rounded-md; font-size: 11px;", 
@@ -305,10 +340,11 @@ function ChatbotInnerContent() {
             reply: data.reply,
             hasTimetableArray: !!data.currentTimetable,
             hasProgressReport: !!data.progressReport,
-            hasPrerequisiteInfo: !!data.prerequisiteInfo,
+            hasSearchResults: !!data.searchResults,
             rawJsonPayload: data 
           }
         );
+
         setMessages((prev) => [
           ...prev,
           {
@@ -456,13 +492,14 @@ function ChatbotInnerContent() {
                           </div>
                         )}
 
-                        {/* RENDERER 1: Course Section List Search Card */}
-                        {msg.structuredData.courseDetails && (
-                          <div className="w-full max-w-2xl rounded-xl border border-slate-100 bg-white p-4 space-y-3 dark:bg-slate-950 dark:border-slate-800/80 shadow-xs">
+                        {/* 🌟 RENDERER 1: 完美修复多张分班卡片并行、排班时段嵌套显示 */}
+                        {msg.structuredData.courseDetails && msg.structuredData.courseDetails.sections && (
+                          <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 space-y-4 dark:bg-slate-950 dark:border-slate-800 shadow-md animate-fade-in">
+                            
                             <div className="flex items-center justify-between border-b pb-2 border-slate-100 dark:border-slate-900">
                               <div className="flex items-center gap-2">
-                                <span className="font-mono text-xs px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-600 dark:text-cyan-400">
-                                  {msg.structuredData.courseDetails.courseCode}
+                                <span className="font-mono text-xs px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/5">
+                                  {msg.structuredData.courseDetails.courseCode || "COURSE"}
                                 </span>
                                 <h4 className="text-xs font-bold text-slate-900 dark:text-white">
                                   {msg.structuredData.courseDetails.courseName}
@@ -471,33 +508,62 @@ function ChatbotInnerContent() {
                               <span className="text-[9px] font-mono font-black text-slate-400 uppercase tracking-widest">Active Intake Offerings</span>
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                               {msg.structuredData.courseDetails.sections.map((sec, sIdx) => {
-                                const isCritical = sec.capacityRemaining <= 3;
+                                const totalCap = sec.totalCapacity || sec.capacity || 35;
+                                const capRemaining = typeof sec.capacityRemaining !== "undefined" ? sec.capacityRemaining : totalCap;
+                                const isCritical = capRemaining <= 3;
+
                                 return (
-                                  <div key={sIdx} className="p-3 rounded-xl border border-slate-100 bg-slate-50/40 dark:border-slate-900/50 dark:bg-slate-900/10 flex flex-col justify-between gap-2 shadow-2xs hover:border-slate-200 dark:hover:border-slate-800 transition">
-                                    <div className="space-y-1">
+                                  <div 
+                                    key={sIdx} 
+                                    className="p-3.5 rounded-xl border border-slate-150 bg-slate-50/50 dark:border-slate-800/80 dark:bg-slate-900/10 flex flex-col justify-between gap-3 shadow-2xs hover:border-cyan-500/40 dark:hover:border-cyan-500/30 transition-all duration-200"
+                                  >
+                                    <div className="space-y-2">
                                       <div className="flex justify-between items-center">
-                                        <span className="font-mono text-xs text-slate-900 dark:text-white">Section {sec.sectionNumber}</span>
-                                        <span className={`text-[8.5px] font-mono font-bold px-1.5 py-0.2 rounded-md ${
+                                        <span className="font-mono font-black text-xs text-slate-900 dark:text-white">
+                                          Section {sec.sectionNumber}
+                                        </span>
+                                        <span className={`text-[8.5px] font-mono font-bold px-1.5 py-0.2 rounded-md border ${
                                           isCritical 
-                                            ? "bg-rose-50 border border-rose-100 text-rose-600 dark:bg-rose-950/40 dark:border-rose-900" 
-                                            : "bg-emerald-50 border border-emerald-100 text-emerald-600 dark:bg-emerald-950/40 dark:border-emerald-900"
+                                            ? "bg-rose-50 border-rose-100 text-rose-600 dark:bg-rose-950/40 dark:border-rose-900/50" 
+                                            : "bg-emerald-50 border-emerald-100 text-emerald-600 dark:bg-emerald-950/40 dark:border-emerald-900/50"
                                         }`}>
-                                          {sec.capacityRemaining} / {sec.totalCapacity} Seats Left
+                                          {capRemaining} / {totalCap} Seats
                                         </span>
                                       </div>
-                                      <p className="text-[11px] font-bold text-slate-700 dark:text-zinc-300 truncate">👤 {sec.lecturerName}</p>
-                                      <p className="text-[10px] text-slate-500 font-mono tracking-tight">🕒 {sec.timeString}</p>
-                                      <p className="text-[10px] text-slate-400">📍 Classroom: <span className="font-bold font-mono text-slate-600 dark:text-slate-400">{sec.venue}</span></p>
+
+                                      <p className="text-[11px] font-bold text-slate-700 dark:text-zinc-300 truncate" title={sec.lecturerName}>
+                                        👤 {sec.lecturerName || "To Be Assigned"}
+                                      </p>
+
+                                      {/* 🕒 精准递归：深度拆解后端传入的 timeSlots 数组与 dayOfWeek 地图 */}
+                                      <div className="text-[10px] text-slate-500 dark:text-slate-400 space-y-0.5 font-mono">
+                                        {sec.timeSlots && sec.timeSlots.length > 0 ? (
+                                          sec.timeSlots.map((ts: any, tIdx: number) => (
+                                            <p key={tIdx} className="tracking-tight flex items-center gap-1">
+                                              🗓️ {getDayName(ts.dayOfWeek)} • {formatTime(ts.startTime)} - {formatTime(ts.endTime)}
+                                            </p>
+                                          ))
+                                        ) : sec.timeString ? (
+                                          <p className="tracking-tight">🕒 {sec.timeString}</p>
+                                        ) : (
+                                          <p className="italic text-slate-400">🕒 Schedule Matrix Staged</p>
+                                        )}
+                                      </div>
+
+                                      <p className="text-[10px] text-slate-400 flex items-center gap-1">
+                                        📍 Venue: <span className="font-bold font-mono text-slate-600 dark:text-slate-300">{sec.venue || "TBA"}</span>
+                                      </p>
                                     </div>
 
                                     <button
                                       type="button"
-                                      onClick={() => handleEnrollSection(msg.structuredData!.courseDetails!.courseCode, sec.sectionNumber)}
-                                      className="w-full mt-1 py-1 text-center bg-cyan-600 hover:bg-cyan-500 text-white font-black text-[10px] rounded-md transition shadow-xs active:scale-[0.98]"
+                                      disabled={isProcessing}
+                                      onClick={() => handleExecuteEnrollPipeline(msg.structuredData!.courseDetails!.courseCode)}
+                                      className="w-full mt-2 py-1.5 text-center bg-slate-900 hover:bg-slate-800 text-white dark:bg-cyan-600 dark:hover:bg-cyan-500 font-black text-[10px] uppercase tracking-wider rounded-lg transition-all shadow-xs active:scale-[0.96] disabled:opacity-40"
                                     >
-                                      Select & Override Section {sec.sectionNumber}
+                                      Enroll Sec {sec.sectionNumber}
                                     </button>
                                   </div>
                                 );
@@ -612,7 +678,6 @@ function ChatbotInnerContent() {
                                       <td className="p-2.5 truncate max-w-[180px] font-bold">{course.courseName}</td>
                                       <td className="p-2.5 text-center font-mono text-slate-400">{course.sectionNumber}</td>
                                       <td className="p-2.5 text-[10px]">
-                                        {/* 🌟 安全加固防御：对 timeSlots 使用可选链检查，规避未排课产生的 crash */}
                                         {course.timeSlots?.map((ts, tIdx) => (
                                           <div key={tIdx} className="leading-tight text-slate-500">
                                             🗓️ {getDayName(ts.dayOfWeek)} • {formatTime(ts.startTime)} - {formatTime(ts.endTime)} <span className="text-slate-400 dark:text-slate-600 font-mono">({course.venue})</span>
@@ -713,7 +778,6 @@ function ChatbotInnerContent() {
                                     <p className="flex items-center gap-1.5">
                                       <Icon name="userGroup" /> Sec {course.sectionNumber}
                                     </p>
-                                    {/* 🌟 核心防空修复：使用可选链 course.timeSlots?.map 确保 timeSlots 缺失时静默渲染防死锁 */}
                                     <p className="flex items-center gap-1.5 font-mono">
                                       <Icon name="calendar" /> {course.timeSlots ? (
                                         course.timeSlots.map(ts => 
